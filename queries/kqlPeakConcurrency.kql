@@ -1,0 +1,4 @@
+WVDConnections
+| extend TimeSlot = bin(TimeGenerated, 15m)
+| summarize ConcurrentSessions = dcount(CorrelationId) by TimeSlot
+| summarize PeakConcurrentSessions = max(ConcurrentSessions)

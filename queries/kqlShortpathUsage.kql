@@ -1,0 +1,13 @@
+let shortpathConns = WVDCheckpoints
+| where Name == "ShortpathEstablished"
+| distinct CorrelationId;
+WVDConnections
+| where State == "Connected"
+| project CorrelationId, UdpUse
+| extend HasShortpathCheckpoint = CorrelationId in (shortpathConns)
+| extend TransportType = case(
+    HasShortpathCheckpoint, "Shortpath (UDP)",
+    UdpUse == "true" or UdpUse == "True" or tostring(UdpUse) == "1", "Shortpath (UdpUse)",
+    "TCP/WebSocket")
+| summarize Connections = count() by TransportType
+| order by Connections desc

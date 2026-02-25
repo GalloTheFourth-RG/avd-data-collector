@@ -1,0 +1,12 @@
+WVDConnections
+| where State == "Connected"
+| extend HourOfDay = hourofday(TimeGenerated), DayOfWeek = dayofweek(TimeGenerated)
+| where DayOfWeek >= 1d and DayOfWeek <= 5d
+| extend TimeSlot = bin(TimeGenerated, 15m)
+| summarize ConcurrentSessions = dcount(CorrelationId) by TimeSlot, HourOfDay
+| summarize
+    AvgConcurrency = round(avg(ConcurrentSessions), 0),
+    PeakConcurrency = max(ConcurrentSessions),
+    P95Concurrency = round(percentile(ConcurrentSessions, 95), 0)
+    by HourOfDay
+| order by HourOfDay asc

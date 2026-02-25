@@ -1,0 +1,12 @@
+union isfuzzy=true
+  (WVDConnections | where TimeGenerated > ago(14d) | take 1 | extend Type = "WVDConnections"),
+  (WVDErrors | where TimeGenerated > ago(14d) | take 1 | extend Type = "WVDErrors"),
+  (WVDConnectionNetworkData | where TimeGenerated > ago(14d) | take 1 | extend Type = "WVDConnectionNetworkData"),
+  (WVDAutoscaleEvaluationPooled | where TimeGenerated > ago(14d) | take 1 | extend Type = "WVDAutoscaleEvaluationPooled"),
+  (Perf | where TimeGenerated > ago(14d) | take 1 | extend Type = "Perf"),
+  (WVDAgentHealthStatus | where TimeGenerated > ago(14d) | take 1 | extend Type = "WVDAgentHealthStatus"),
+  (Event | where TimeGenerated > ago(14d) | take 1 | extend Type = "Event"),
+  (WVDMultiLinkAdd | where TimeGenerated > ago(14d) | take 1 | extend Type = "WVDMultiLinkAdd"),
+  (WVDCheckpoints | where TimeGenerated > ago(14d) | take 1 | extend Type = "WVDCheckpoints")
+| summarize Count = count() by Type
+| order by Type asc

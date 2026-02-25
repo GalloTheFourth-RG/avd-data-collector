@@ -1,0 +1,28 @@
+let shortpathConns = WVDCheckpoints
+| where Name == "ShortpathEstablished"
+| distinct CorrelationId;
+let classified = WVDConnections
+| where State == "Connected"
+| project CorrelationId, UdpUse, SessionHostName
+| extend TransportType = case(
+    CorrelationId in (shortpathConns), "Shortpath (UDP)",
+    UdpUse == "true" or UdpUse == "True" or UdpUse == true, "Shortpath (UdpUse)",
+    "TCP (Standard)")
+| project CorrelationId, TransportType, SessionHostName;
+let network = WVDConnectionNetworkData
+| where isnotnull(EstRoundTripTimeInMs) and EstRoundTripTimeInMs > 0
+| summarize AvgRTT = round(avg(EstRoundTripTimeInMs), 1), P95RTT = round(percentile(EstRoundTripTimeInMs, 95), 1) by CorrelationId;
+let errors = WVDErrors
+| summarize ErrorCode = take_any(CodeSymbolic) by CorrelationId;
+classified
+| join kind=leftouter network on CorrelationId
+| join kind=leftouter errors on CorrelationId
+| extend IsAbnormal = isnotempty(ErrorCode) and not(ErrorCode has_any ("ClientDisconnect", "LogoffByUser", "UserInitiated", "ActivityTimeout", "SessionTimeout", "IdleTimeout", "SessionLogoff", "IdleDisconnect"))
+| summarize
+    TotalConnections = count(),
+    AbnormalDisconnects = countif(IsAbnormal),
+    AvgRTTms = round(avg(AvgRTT), 1),
+    P95RTTms = round(avg(P95RTT), 1)
+    by TransportType
+| extend DisconnectPct = round(100.0 * AbnormalDisconnects / TotalConnections, 1)
+| order by TotalConnections desc

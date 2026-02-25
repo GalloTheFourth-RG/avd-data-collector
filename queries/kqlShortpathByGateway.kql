@@ -1,0 +1,23 @@
+let shortpathConns = WVDCheckpoints
+| where Name == "ShortpathEstablished"
+| distinct CorrelationId;
+WVDConnections
+| where State == "Connected"
+| extend TransportCategory = case(
+    CorrelationId in (shortpathConns), "Shortpath (UDP)",
+    UdpUse == "true" or UdpUse == "True" or tostring(UdpUse) == "1", "Shortpath (UDP)",
+    "TCP/Websocket (Full Fallback)")
+| join kind=leftouter (
+    WVDConnectionNetworkData
+    | where isnotnull(EstRoundTripTimeInMs) and EstRoundTripTimeInMs > 0
+    | summarize AvgRTT = round(avg(EstRoundTripTimeInMs), 1) by CorrelationId
+) on CorrelationId
+| summarize
+    TotalConnections = count(),
+    ShortpathPct = round(100.0 * countif(TransportCategory == "Shortpath (UDP)") / count(), 1),
+    TurnPct = round(100.0 * countif(TransportCategory == "TURN (UDP Relay)") / count(), 1),
+    TcpPct = round(100.0 * countif(TransportCategory == "TCP/Websocket (Full Fallback)") / count(), 1),
+    AvgRTTms = round(avg(AvgRTT), 1),
+    PrivateLinkPct = round(100.0 * countif(IsClientPrivateLink == "True" or IsSessionHostPrivateLink == "True") / count(), 1)
+    by GatewayRegion
+| order by TotalConnections desc

@@ -1,0 +1,55 @@
+let checkpoints = WVDCheckpoints
+| where Name in (
+    "StartOrchestration", "LoadBalancedNewConnection", "OrchestrationCompleted",
+    "OnCredentialsAcquisitionStarted", "OnCredentialsAcquisitionCompleted",
+    "OnSecurityHandshakeCompleted", "RdpStackAuthenticaticatedUser",
+    "TransportConnecting", "TransportConnected",
+    "ShortpathRequested", "ShortpathEstablished", "GatewayTransportReplacedByShortpath",
+    "RdpStackConnectionEstablished", "RdpStackLogon", "LogonDelay",
+    "RdpShellAppExecution", "RdpShellAppExecuted",
+    "FirstGraphicsFrame", "FirstGraphicsFramePresented",
+    "OnCoreApiLoginComplete")
+| project CorrelationId, Name, TimeGenerated, Source;
+let sessions = checkpoints
+| summarize
+    StartTime = minif(TimeGenerated, Name == "StartOrchestration"),
+    BrokerTime = minif(TimeGenerated, Name == "LoadBalancedNewConnection"),
+    OrchDone = minif(TimeGenerated, Name == "OrchestrationCompleted"),
+    AuthStart = minif(TimeGenerated, Name == "OnCredentialsAcquisitionStarted"),
+    AuthDone = minif(TimeGenerated, Name == "OnCredentialsAcquisitionCompleted"),
+    HandshakeDone = minif(TimeGenerated, Name == "OnSecurityHandshakeCompleted"),
+    TransportReady = minif(TimeGenerated, Name == "TransportConnected"),
+    ShortpathDone = minif(TimeGenerated, Name == "ShortpathEstablished"),
+    RdpReady = minif(TimeGenerated, Name == "RdpStackConnectionEstablished"),
+    LogonDone = minif(TimeGenerated, Name == "RdpStackLogon"),
+    ShellStart = minif(TimeGenerated, Name == "RdpShellAppExecution"),
+    ShellReady = minif(TimeGenerated, Name == "RdpShellAppExecuted"),
+    FirstFrame = minif(TimeGenerated, Name == "FirstGraphicsFramePresented"),
+    LoginComplete = minif(TimeGenerated, Name == "OnCoreApiLoginComplete")
+    by CorrelationId;
+sessions
+| where isnotnull(StartTime) and isnotnull(LoginComplete)
+| extend
+    TotalLoginSec = round(datetime_diff('millisecond', LoginComplete, StartTime) / 1000.0, 1),
+    BrokeringSec = round(datetime_diff('millisecond', coalesce(OrchDone, BrokerTime), StartTime) / 1000.0, 1),
+    AuthSec = round(datetime_diff('millisecond', coalesce(HandshakeDone, AuthDone), coalesce(AuthStart, OrchDone, StartTime)) / 1000.0, 1),
+    TransportSec = round(datetime_diff('millisecond', coalesce(TransportReady, RdpReady), coalesce(HandshakeDone, AuthDone, StartTime)) / 1000.0, 1),
+    LogonSec = round(datetime_diff('millisecond', coalesce(LogonDone, ShellStart), coalesce(RdpReady, TransportReady)) / 1000.0, 1),
+    ShellSec = round(datetime_diff('millisecond', coalesce(ShellReady, FirstFrame), coalesce(ShellStart, LogonDone)) / 1000.0, 1),
+    GotShortpath = isnotnull(ShortpathDone)
+| summarize
+    TotalConnections = count(),
+    AvgTotalSec = round(avg(TotalLoginSec), 1),
+    P50TotalSec = round(percentile(TotalLoginSec, 50), 1),
+    P95TotalSec = round(percentile(TotalLoginSec, 95), 1),
+    AvgBrokeringSec = round(avg(BrokeringSec), 1),
+    P95BrokeringSec = round(percentile(BrokeringSec, 95), 1),
+    AvgAuthSec = round(avg(AuthSec), 1),
+    P95AuthSec = round(percentile(AuthSec, 95), 1),
+    AvgTransportSec = round(avg(TransportSec), 1),
+    P95TransportSec = round(percentile(TransportSec, 95), 1),
+    AvgLogonSec = round(avg(LogonSec), 1),
+    P95LogonSec = round(percentile(LogonSec, 95), 1),
+    AvgShellSec = round(avg(ShellSec), 1),
+    P95ShellSec = round(percentile(ShellSec, 95), 1),
+    ShortpathPct = round(100.0 * countif(GotShortpath) / count(), 1)

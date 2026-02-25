@@ -1,0 +1,13 @@
+let connRegions = WVDConnections
+    | where State == "Connected" and isnotempty(GatewayRegion)
+    | project CorrelationId, GatewayRegion;
+WVDConnectionNetworkData
+| where isnotnull(EstRoundTripTimeInMs) and EstRoundTripTimeInMs > 0
+| lookup kind=inner connRegions on CorrelationId
+| summarize
+    AvgRTTms = round(avg(EstRoundTripTimeInMs), 1),
+    P95RTTms = round(percentile(EstRoundTripTimeInMs, 95), 1),
+    AvgBandwidthKBps = round(avg(EstAvailableBandwidthKBps), 0),
+    Connections = dcount(CorrelationId)
+    by GatewayRegion
+| order by Connections desc

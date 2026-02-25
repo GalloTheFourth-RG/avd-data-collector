@@ -1,0 +1,11 @@
+WVDConnections
+| extend HostPool = tostring(split(_ResourceId, '/')[-1])
+| summarize
+    TotalAttempts = count(),
+    Succeeded = countif(State == "Connected" or State == "Completed"),
+    Failed = countif(State == "Failed"),
+    UniqueUsers = dcount(UserName)
+    by HostPool
+| extend SuccessRate = round(todouble(Succeeded) / todouble(TotalAttempts) * 100, 1),
+         FailureRate = round(todouble(Failed) / todouble(TotalAttempts) * 100, 1)
+| order by FailureRate desc

@@ -1,0 +1,28 @@
+let sessions = WVDConnections
+| where State == "Connected"
+| project CorrelationId, SessionHostName;
+let completions = WVDConnections
+| where State == "Completed"
+| project CorrelationId, CompletedTime = TimeGenerated;
+let errors = WVDErrors
+| summarize ErrorCode = take_any(CodeSymbolic) by CorrelationId;
+sessions
+| join kind=leftouter completions on CorrelationId
+| join kind=leftouter errors on CorrelationId
+| where isnotnull(CompletedTime) or isnotempty(ErrorCode)
+| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, '/')[1]), SessionHostName)
+| extend IsAbnormal = isnotempty(ErrorCode) and not(ErrorCode has_any ("ClientDisconnect", "LogoffByUser", "UserInitiated", "ActivityTimeout", "SessionTimeout", "IdleTimeout", "SessionLogoff", "IdleDisconnect", "AutoReconnect", "Reconnect", "SavedCredentialsNotAllowed", "AutoReconnectNoCookie"))
+| summarize
+    TotalSessions = dcount(CorrelationId),
+    AbnormalDisconnects = dcountif(CorrelationId, IsAbnormal),
+    NetworkDrops = dcountif(CorrelationId, isnotempty(ErrorCode) and (ErrorCode has_any ("MissedHeartbeat", "ConnectionBroken", "ConnectionLost", "NL_DISCONNECT", "CM_ERR_MISSED_HEARTBEAT", "TransportClose", "ConnectionDropped", "SocketClose") or ErrorCode contains "Shortpath" or ErrorCode contains "NetworkDrop" or ErrorCode contains "PeerLeg" or ErrorCode contains "Heartbeat")),
+    Timeouts = dcountif(CorrelationId, isnotempty(ErrorCode) and ErrorCode has_any ("ActivityTimeout", "SessionTimeout", "IdleTimeout", "SessionLogoff", "IdleDisconnect")),
+    ServerSide = dcountif(CorrelationId, isnotempty(ErrorCode) and ErrorCode has_any ("ServerDisconnect", "ServerShutdown", "HostShutdown", "SessionHostShutdown", "ServerMaintenanceDisconnect")),
+    AuthFailures = dcountif(CorrelationId, isnotempty(ErrorCode) and ErrorCode has_any ("LogonFailed", "AuthenticationLogonFailed", "FreshCredsRequired", "PasswordExpired", "AccountLocked", "AccountExpired", "InvalidCredentials", "CredSSP", "Kerberos")),
+    ResourceIssues = dcountif(CorrelationId, isnotempty(ErrorCode) and ErrorCode has_any ("OutOfMemory", "DiskFull", "ResourceExhausted", "QuotaExceeded")),
+    OtherErrors = dcountif(CorrelationId, IsAbnormal and not(ErrorCode has_any ("MissedHeartbeat", "ConnectionBroken", "ConnectionLost", "NL_DISCONNECT", "CM_ERR_MISSED_HEARTBEAT", "TransportClose", "ConnectionDropped", "SocketClose", "ServerDisconnect", "ServerShutdown", "HostShutdown", "SessionHostShutdown", "ServerMaintenanceDisconnect", "LogonFailed", "AuthenticationLogonFailed", "FreshCredsRequired", "PasswordExpired", "AccountLocked", "AccountExpired", "InvalidCredentials", "CredSSP", "Kerberos", "OutOfMemory", "DiskFull", "ResourceExhausted", "QuotaExceeded")))
+    by SessionHostName = HostName
+| extend AbnormalPct = round(100.0 * AbnormalDisconnects / TotalSessions, 1)
+| where TotalSessions > 5
+| order by AbnormalPct desc
+| take 30

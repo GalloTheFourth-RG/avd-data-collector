@@ -1,0 +1,8 @@
+WVDErrors
+| summarize
+    ErrorCount = count(),
+    DistinctUsers = dcount(UserName),
+    DistinctCorrelations = dcount(CorrelationId)
+    by CodeSymbolic, Message = substring(Message, 0, 200)
+| order by ErrorCount desc
+| take 50

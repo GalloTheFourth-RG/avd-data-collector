@@ -1,0 +1,3 @@
+WVDConnections
+| summarize Connections = count() by UserName, ClientOS
+| order by Connections desc

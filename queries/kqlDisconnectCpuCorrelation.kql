@@ -1,0 +1,30 @@
+let hasPerfData = toscalar(Perf | where ObjectName == "Processor" and CounterName == "% Processor Time" | take 1 | count);
+let disconnects = WVDConnections
+| where State == "Completed"
+| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, '/')[1]), SessionHostName)
+| extend HostNameShort = tostring(split(HostName, '.')[0])
+| join kind=leftouter (WVDErrors | summarize ErrorCode = take_any(CodeSymbolic) by CorrelationId) on CorrelationId
+| where isnotempty(ErrorCode) and not(ErrorCode has_any ("ClientDisconnect", "LogoffByUser", "UserInitiated", "ActivityTimeout", "SessionTimeout", "IdleTimeout"))
+| project DisconnectTime = TimeGenerated, HostName, HostNameShort, CorrelationId, ErrorCode;
+let cpuData = Perf
+| where ObjectName == "Processor" and CounterName == "% Processor Time" and InstanceName == "_Total"
+| extend ComputerShort = tostring(split(Computer, '.')[0])
+| project CpuTime = TimeGenerated, Computer, ComputerShort, CpuValue = CounterValue;
+disconnects
+| join kind=inner (cpuData) on $left.HostNameShort == $right.ComputerShort
+| where CpuTime between (DisconnectTime - 5m .. DisconnectTime)
+| summarize
+    MaxCpuBefore = round(max(CpuValue), 1),
+    AvgCpuBefore = round(avg(CpuValue), 1),
+    CpuSamplesFound = count()
+    by HostName, CorrelationId, ErrorCode
+| summarize
+    TotalDisconnects = count(),
+    DisconnectsWithHighCpu = countif(MaxCpuBefore > 90),
+    DisconnectsWithMedCpu = countif(MaxCpuBefore > 70 and MaxCpuBefore <= 90),
+    AvgPreDisconnectCpu = round(avg(AvgCpuBefore), 1),
+    MaxPreDisconnectCpu = round(max(MaxCpuBefore), 1)
+    by HostName
+| extend HighCpuCorrelationPct = round(100.0 * DisconnectsWithHighCpu / TotalDisconnects, 1)
+| where TotalDisconnects > 2
+| order by HighCpuCorrelationPct desc

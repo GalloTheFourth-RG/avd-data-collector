@@ -1,0 +1,19 @@
+Perf
+| where ObjectName == "Processor" and CounterName == "% Processor Time" and InstanceName == "_Total"
+| summarize
+    AvgCpu = round(avg(CounterValue), 1),
+    P50Cpu = round(percentile(CounterValue, 50), 1),
+    P95Cpu = round(percentile(CounterValue, 95), 1),
+    P99Cpu = round(percentile(CounterValue, 99), 1),
+    MaxCpu = round(max(CounterValue), 1),
+    SpikeMinutesOver90 = countif(CounterValue > 90),
+    SpikeMinutesOver80 = countif(CounterValue > 80),
+    TotalSamples = count()
+    by Computer
+| extend SpikePctOver90 = round(100.0 * SpikeMinutesOver90 / TotalSamples, 1)
+| extend SpikePctOver80 = round(100.0 * SpikeMinutesOver80 / TotalSamples, 1)
+| extend SizingConfidence = case(
+    (P95Cpu - AvgCpu) > 40, "Low — High variance, spikes skew averages",
+    (P95Cpu - AvgCpu) > 25, "Medium — Moderate spike impact",
+    "High — Stable, averages are representative")
+| order by P95Cpu desc

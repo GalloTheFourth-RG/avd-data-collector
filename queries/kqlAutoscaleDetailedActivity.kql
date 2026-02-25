@@ -1,0 +1,20 @@
+union isfuzzy=true
+    (WVDAutoscaleEvaluationPooled
+    | extend HostPoolPath = tostring(Properties.hostPoolArmPath),
+             PoolName = tostring(split(Properties.hostPoolArmPath, '/')[-1]),
+             ResultType = tostring(ResultType),
+             ActiveHosts = toint(Properties.activeSessionHostCount),
+             TotalHosts = toint(Properties.totalSessionHostCount),
+             SessionsOnActive = toint(Properties.activeSessionCount),
+             ConfigCapacityThreshold = toint(Properties.capacityThreshold)
+    | summarize
+        Evaluations = count(),
+        Succeeded = countif(ResultType == "Succeeded" or Result == "Succeeded"),
+        Failed = countif(ResultType == "Failed" or Result == "Failed"),
+        AvgActiveHosts = round(avg(ActiveHosts), 1),
+        MaxActiveHosts = max(ActiveHosts),
+        AvgTotalHosts = round(avg(TotalHosts), 1),
+        AvgSessions = round(avg(SessionsOnActive), 1)
+        by PoolName
+    | where isnotempty(PoolName)),
+    (print PoolName="NoTable", Evaluations=0, Succeeded=0, Failed=0, AvgActiveHosts=0.0, MaxActiveHosts=0, AvgTotalHosts=0.0, AvgSessions=0.0 | where 1==0)

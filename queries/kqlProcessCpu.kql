@@ -1,0 +1,14 @@
+Perf
+| where ObjectName == "Process" and CounterName == "% Processor Time" and InstanceName != "_Total" and InstanceName != "Idle"
+| where CounterValue > 0
+| extend Computer = tostring(Computer)
+| summarize
+    AvgCpu = round(avg(CounterValue), 1),
+    P50Cpu = round(percentile(CounterValue, 50), 1),
+    P95Cpu = round(percentile(CounterValue, 95), 1),
+    MaxCpu = round(max(CounterValue), 1),
+    Samples = count()
+    by ProcessName = InstanceName, Computer
+| where Samples > 10
+| order by P95Cpu desc
+| take 200

@@ -1,0 +1,7 @@
+WVDConnections
+| where State == "Completed"
+| join kind=leftouter (WVDErrors | summarize ErrorCode = take_any(CodeSymbolic) by CorrelationId) on CorrelationId
+| where isnotempty(ErrorCode) and not(ErrorCode has_any ("ClientDisconnect", "LogoffByUser", "UserInitiated", "ActivityTimeout", "SessionTimeout", "IdleTimeout"))
+| extend HourOfDay = hourofday(TimeGenerated), DayOfWeek = dayofweek(TimeGenerated) / 1d
+| summarize DisconnectCount = count() by HourOfDay, DayOfWeek = toint(DayOfWeek)
+| order by DayOfWeek asc, HourOfDay asc

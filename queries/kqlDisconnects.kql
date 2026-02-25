@@ -1,0 +1,15 @@
+let starts = WVDConnections | where State == "Connected" | project CorrelationId, SessionHostName, ConnectTime = TimeGenerated;
+let ends = WVDConnections | where State == "Completed" | project CorrelationId, EndTime = TimeGenerated;
+starts
+| join kind=inner ends on CorrelationId
+| extend SessionDurationSec = datetime_diff('second', EndTime, ConnectTime)
+| extend IsUnexpected = (SessionDurationSec < 60)
+| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, '/')[1]), SessionHostName)
+| summarize
+    TotalSessions = count(),
+    UnexpectedDisconnects = countif(IsUnexpected),
+    AvgSessionMinutes = round(avg(SessionDurationSec / 60.0), 1)
+    by SessionHostName = HostName
+| extend DisconnectPct = round(todouble(UnexpectedDisconnects) / TotalSessions * 100, 1)
+| where TotalSessions > 5
+| order by DisconnectPct desc

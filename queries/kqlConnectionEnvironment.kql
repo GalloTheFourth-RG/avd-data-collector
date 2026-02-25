@@ -1,0 +1,8 @@
+WVDConnections
+| where State == "Connected"
+| summarize
+    TotalConnections = count(),
+    DistinctUsers = dcount(UserName),
+    DistinctHosts = dcount(SessionHostName)
+    by SessionHostJoinType, SessionHostOSVersion, SessionHostOSDescription
+| order by TotalConnections desc

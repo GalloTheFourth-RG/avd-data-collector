@@ -1,0 +1,9 @@
+WVDErrors
+| summarize
+    ErrorCount = count(),
+    DistinctUsers = dcount(UserName),
+    DistinctCorrelations = dcount(CorrelationId),
+    SampleMessages = make_set(Message, 3)
+    by CodeSymbolic, ServiceError, Source, Operation
+| order by ErrorCount desc
+| take 30

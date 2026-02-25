@@ -1,0 +1,18 @@
+WVDAgentHealthStatus
+| summarize arg_max(TimeGenerated, *) by SessionHostName
+| project
+    SessionHostName,
+    AgentVersion,
+    OSVersion,
+    SxSStackVersion,
+    EndpointState,
+    Status,
+    LastHeartBeat,
+    LastUpgradeTimeStamp,
+    UpgradeState,
+    UpgradeErrorMsg,
+    ActiveSessions,
+    InactiveSessions,
+    AllowNewSessions,
+    SessionHostHealthCheckResult
+| order by SessionHostName asc

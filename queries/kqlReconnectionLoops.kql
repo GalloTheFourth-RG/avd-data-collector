@@ -1,0 +1,25 @@
+WVDConnections
+| where State == "Connected"
+| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, '/')[1]), SessionHostName)
+| project TimeGenerated, UserName, HostName, CorrelationId
+| order by UserName asc, TimeGenerated asc
+| serialize
+| extend PrevTime = prev(TimeGenerated), PrevUser = prev(UserName)
+| extend GapMinutes = iff(UserName == PrevUser, datetime_diff('minute', TimeGenerated, PrevTime), 999)
+| where GapMinutes <= 30 and GapMinutes >= 0
+| summarize
+    ReconnectCount = count(),
+    FirstConnect = min(TimeGenerated),
+    LastConnect = max(TimeGenerated),
+    DistinctHosts = dcount(HostName),
+    Hosts = make_set(HostName, 5)
+    by UserName, WindowStart = bin(TimeGenerated, 30m)
+| where ReconnectCount >= 3
+| summarize
+    LoopIncidents = count(),
+    WorstLoopSize = max(ReconnectCount),
+    TotalReconnects = sum(ReconnectCount),
+    DistinctHosts = max(DistinctHosts)
+    by UserName
+| order by TotalReconnects desc
+| take 50

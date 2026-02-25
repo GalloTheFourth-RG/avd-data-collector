@@ -1,0 +1,22 @@
+union isfuzzy=true
+    (WVDMultiLinkAdd
+    | extend
+        ClientTransport = tostring(ClientTransportType),
+        ServerTransport = tostring(ServerTransportType)
+    | extend TransportLabel = case(
+        ClientTransport == "DIRECT" and ServerTransport == "DIRECT", "Direct",
+        ClientTransport == "STUN" or ServerTransport == "STUN", "STUN",
+        ClientTransport == "TURN" and ServerTransport == "TURN", "TURN",
+        ClientTransport == "TURN" or ServerTransport == "TURN", "STUN/TURN",
+        ClientTransport == "WEBSOCKET" or ServerTransport == "WEBSOCKET", "WebSocket",
+        "Other")
+    | extend IsInitialLink = (LinkId == 1)
+    | summarize
+        Connections = count(),
+        GatewayRegions = make_set(GatewayRegion, 10)
+        by TransportLabel, IsInitialLink
+    | extend PctOfTotal = round(100.0 * Connections / toscalar(
+        WVDMultiLinkAdd | count
+      ), 1)
+    | order by IsInitialLink desc, Connections desc),
+    (print TransportLabel="NoTable", IsInitialLink=false, Connections=0, PctOfTotal=0.0, GatewayRegions=dynamic([]) | where 1==0)

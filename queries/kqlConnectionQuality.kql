@@ -1,0 +1,19 @@
+let connOS = WVDConnections
+    | where State == "Connected"
+    | project CorrelationId, ClientOS;
+WVDConnectionNetworkData
+| where isnotnull(EstRoundTripTimeInMs) and EstRoundTripTimeInMs > 0
+| lookup kind=inner connOS on CorrelationId
+| summarize
+    AvgRTTms = round(avg(EstRoundTripTimeInMs), 1),
+    P50RTTms = round(percentile(EstRoundTripTimeInMs, 50), 1),
+    P95RTTms = round(percentile(EstRoundTripTimeInMs, 95), 1),
+    MaxRTTms = round(max(EstRoundTripTimeInMs), 1),
+    AvgBandwidthKBps = round(avg(EstAvailableBandwidthKBps), 0),
+    MinBandwidthKBps = round(min(EstAvailableBandwidthKBps), 0),
+    Connections = dcount(CorrelationId),
+    HighLatency_Over150ms = countif(EstRoundTripTimeInMs > 150),
+    PoorLatency_Over250ms = countif(EstRoundTripTimeInMs > 250)
+    by ClientOS
+| extend HighLatencyPct = round(todouble(HighLatency_Over150ms) / Connections * 100, 1)
+| order by P95RTTms desc

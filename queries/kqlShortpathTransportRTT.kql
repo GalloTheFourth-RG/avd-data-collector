@@ -1,0 +1,30 @@
+let shortpathConns = WVDCheckpoints
+| where Name == "ShortpathEstablished"
+| distinct CorrelationId;
+let connections = WVDConnections
+| where State == "Connected"
+| extend TransportCategory = case(
+    CorrelationId in (shortpathConns), "Shortpath (UDP)",
+    UdpUse == "true" or UdpUse == "True" or tostring(UdpUse) == "1", "Shortpath (UDP)",
+    "TCP/Websocket (Full Fallback)");
+connections
+| join kind=leftouter (
+    WVDConnectionNetworkData
+    | where isnotnull(EstRoundTripTimeInMs) and EstRoundTripTimeInMs > 0
+    | summarize
+        AvgRTT = round(avg(EstRoundTripTimeInMs), 1),
+        P95RTT = round(percentile(EstRoundTripTimeInMs, 95), 1),
+        AvgBandwidthKBps = round(avg(EstAvailableBandwidthKBps), 0)
+        by CorrelationId
+) on CorrelationId
+| summarize
+    TotalConnections = count(),
+    AvgRTTms = round(avg(AvgRTT), 1),
+    P95RTTms = round(avg(P95RTT), 1),
+    AvgBandwidthKBps = round(avg(AvgBandwidthKBps), 0),
+    AbnormalDisconnects = countif(isnotempty(PredecessorConnectionId))
+    by TransportCategory
+| extend
+    ConnectionPct = round(100.0 * TotalConnections / toscalar(connections | count), 1),
+    DisconnectRate = round(100.0 * AbnormalDisconnects / TotalConnections, 1)
+| order by TotalConnections desc

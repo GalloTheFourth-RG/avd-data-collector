@@ -1,0 +1,51 @@
+let sessions = WVDConnections
+| where State == "Connected"
+| project CorrelationId, SessionHostName, UserName;
+let completions = WVDConnections
+| where State == "Completed"
+| project CorrelationId, CompletedTime = TimeGenerated;
+let errors = WVDErrors
+| summarize ErrorCode = take_any(CodeSymbolic), ErrorMsg = take_any(substring(Message, 0, 150)) by CorrelationId;
+let enriched = sessions
+| join kind=leftouter completions on CorrelationId
+| join kind=leftouter errors on CorrelationId;
+let completedOrErrored = enriched
+| where isnotnull(CompletedTime) or isnotempty(ErrorCode);
+let totalCompleted = toscalar(completedOrErrored | summarize dcount(CorrelationId));
+completedOrErrored
+| extend Category = case(
+    // Network / Heartbeat - connection lost between client and host
+    isnotempty(ErrorCode) and (ErrorCode has_any ("MissedHeartbeat", "ConnectionBroken", "ConnectionLost", "NL_DISCONNECT", "CM_ERR_MISSED_HEARTBEAT", "TransportClose", "ConnectionDropped", "SocketClose") or ErrorCode contains "Shortpath" or ErrorCode contains "NetworkDrop" or ErrorCode contains "PeerLeg" or ErrorCode contains "Heartbeat"), "Network Drop",
+    // User-initiated - normal user logoff or client disconnect
+    isnotempty(ErrorCode) and ErrorCode has_any ("ClientDisconnect", "LogoffByUser", "UserInitiated", "ConnectionFailedClientDisconnect"), "User Initiated",
+    // Idle / Activity timeout - session timed out due to inactivity
+    isnotempty(ErrorCode) and ErrorCode has_any ("ActivityTimeout", "SessionTimeout", "IdleTimeout", "SessionLogoff", "IdleDisconnect"), "Idle Timeout",
+    // Authentication - logon, password, or credential failures
+    isnotempty(ErrorCode) and ErrorCode has_any ("LogonFailed", "AuthenticationLogonFailed", "FreshCredsRequired", "PasswordExpired", "AccountLocked", "AccountExpired", "InvalidCredentials", "SavedCredentialsNotAllowed", "CredSSP", "Kerberos", "NLA", "AutoReconnectNoCookie"), "Authentication",
+    // Server-side - host shutdown, reboot, or scaling action
+    isnotempty(ErrorCode) and ErrorCode has_any ("ServerDisconnect", "ServerShutdown", "HostShutdown", "SessionHostShutdown", "ServerMaintenanceDisconnect"), "Server Side",
+    // Resource exhaustion - out of memory, disk full
+    isnotempty(ErrorCode) and ErrorCode has_any ("OutOfMemory", "DiskFull", "ResourceExhausted", "QuotaExceeded"), "Resource Exhaustion",
+    // No healthy host available - capacity or health issue
+    isnotempty(ErrorCode) and ErrorCode has_any ("NoHealthyRdsh", "NoHealthySession", "MaxSession", "SessionHostNotFound", "HostPoolNotFound", "NoAvailableSession"), "Licensing/Capacity",
+    // Agent / Health - RD Agent or host health issues
+    isnotempty(ErrorCode) and ErrorCode has_any ("AgentRegistration", "AgentHeartbeat", "Unavailable", "HostNotAvailable", "DomainJoin", "DomainTrust"), "Agent/Health",
+    // Gateway / Broker - control plane issues
+    isnotempty(ErrorCode) and ErrorCode has_any ("GatewayError", "BrokerError", "OrchestrationError", "ReverseConnect", "PendingReconnect"), "Gateway/Broker",
+    // FSLogix / Profile - profile container issues
+    isnotempty(ErrorCode) and ErrorCode has_any ("ERROR_PATH_NOT_FOUND", "ProfileDisk", "FSLogix", "VHD"), "Profile/FSLogix",
+    // Catch remaining known non-critical codes
+    isnotempty(ErrorCode) and ErrorCode has_any ("AutoReconnect", "Reconnect"), "Auto-Reconnect",
+    // Anything else with an error code
+    isnotempty(ErrorCode), strcat("Other: ", ErrorCode),
+    "Normal Completion"
+)
+| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, '/')[1]), SessionHostName)
+| summarize
+    SessionCount = dcount(CorrelationId),
+    DistinctUsers = dcount(UserName),
+    DistinctHosts = dcount(HostName),
+    SampleError = take_any(ErrorMsg)
+    by DisconnectCategory = Category
+| extend Pct = round(100.0 * SessionCount / totalCompleted, 1)
+| order by SessionCount desc

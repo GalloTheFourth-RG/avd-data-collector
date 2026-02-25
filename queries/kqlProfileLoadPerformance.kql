@@ -1,0 +1,22 @@
+WVDConnections
+| where State == "Started"
+| project CorrelationId, StartTime = TimeGenerated
+| join kind=inner (
+    WVDConnections
+    | where State == "Connected"
+    | project CorrelationId, SessionHostName, ConnectTime = TimeGenerated
+) on CorrelationId
+| extend ConnectionTimeSec = datetime_diff('second', ConnectTime, StartTime)
+| where ConnectionTimeSec >= 0 and ConnectionTimeSec < 600
+| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, '/')[1]), SessionHostName)
+| summarize
+    AvgProfileLoadSec = round(avg(ConnectionTimeSec), 1),
+    P50ProfileLoadSec = round(percentile(ConnectionTimeSec, 50), 1),
+    P95ProfileLoadSec = round(percentile(ConnectionTimeSec, 95), 1),
+    MaxProfileLoadSec = round(max(ConnectionTimeSec), 1),
+    TotalSessions = count(),
+    SlowLogins_Over30s = countif(ConnectionTimeSec > 30),
+    VerySlowLogins_Over60s = countif(ConnectionTimeSec > 60)
+    by SessionHostName = HostName
+| extend SlowLoginPct = round(todouble(SlowLogins_Over30s) / TotalSessions * 100, 1)
+| order by P95ProfileLoadSec desc

@@ -1,0 +1,4 @@
+union isfuzzy=true
+    (WVDAutoscaleEvaluationPooled
+    | summarize EvaluationCount = count() by Result),
+    (print Result="NoTable", EvaluationCount=0 | where 1==0)

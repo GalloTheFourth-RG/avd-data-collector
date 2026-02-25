@@ -1,0 +1,11 @@
+WVDAgentHealthStatus
+| summarize arg_max(TimeGenerated, AgentVersion, OSVersion, SxSStackVersion, EndpointState) by SessionHostName
+| summarize
+    HostCount = dcount(SessionHostName),
+    Hosts = make_set(SessionHostName, 100)
+    by AgentVersion, SxSStackVersion
+| extend
+    PctOfFleet = round(100.0 * HostCount / toscalar(
+        WVDAgentHealthStatus | summarize arg_max(TimeGenerated, *) by SessionHostName | count
+    ), 1)
+| order by HostCount desc
