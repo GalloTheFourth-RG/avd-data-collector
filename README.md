@@ -1,64 +1,113 @@
 # AVD Data Collector
 
-**Open-source data collection tool for Azure Virtual Desktop environments.**
+> **Open-source data collection for Azure Virtual Desktop**
 
-> Version 1.0.0 | June 2025
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![PowerShell 7.2+](https://img.shields.io/badge/PowerShell-7.2%2B-5391FE?logo=powershell&logoColor=white)
+![Azure](https://img.shields.io/badge/Azure-AVD-0078D4?logo=microsoftazure&logoColor=white)
 
-Collects ARM resource inventory, Azure Monitor metrics, and Log Analytics (KQL) query results from your AVD deployment and exports them as a portable **collection pack** (ZIP of JSON files). No analysis, no scoring, no proprietary logic — just raw data you can feed into any tooling.
+Collects ARM resource inventory, Azure Monitor metrics, and Log Analytics (KQL) query results from your AVD deployment and exports them as a portable **collection pack** — a ZIP of JSON files you can feed into any tooling.
 
----
-
-## What It Collects
-
-| Category | Data | Source |
-|----------|------|--------|
-| **Host Pools** | Configuration, load balancing, settings, registration tokens | `Get-AzWvdHostPool` |
-| **Session Hosts** | Status, agent version, health, active sessions | `Get-AzWvdSessionHost` |
-| **Virtual Machines** | Size, OS, zones, tags, disks, NICs, security profile, extensions | `Get-AzVM` (bulk per RG) |
-| **VM Scale Sets** | VMSS config and individual instance details | `Get-AzVmss` / `Get-AzVmssVM` |
-| **Application Groups** | App group types, host pool assignments | `Get-AzWvdApplicationGroup` |
-| **Scaling Plans** | Autoscale definitions, schedules, pool assignments | `Get-AzResource` (ARM) |
-| **Azure Monitor Metrics** | CPU, memory, disk IOPS per VM (configurable lookback) | `Get-AzMetric` |
-| **Log Analytics (KQL)** | 36 pre-built queries covering connections, errors, profiles, Shortpath, agent health, and more | `Invoke-AzOperationalInsightsQuery` |
-| **Capacity Reservations** | CRG utilization, allocated vs used capacity | `Invoke-AzRestMethod` (ARM REST) |
-| **Quota Usage** | Per-region vCPU quota (current/limit) | `Get-AzVMUsage` |
+**No analysis, no scoring, no proprietary logic.** Just raw data, fully transparent.
 
 ---
 
-## Quick Start
+## ⚡ Quick Install
+
+Run this in PowerShell 7 to download the collector + all query files:
 
 ```powershell
-# 1. Dry run — preview what will be collected
+irm "https://raw.githubusercontent.com/GalloTheFourth-RG/avd-data-collector/main/Install-AVDCollector.ps1" | iex
+```
+
+Or clone the repo:
+
+```powershell
+git clone https://github.com/GalloTheFourth-RG/avd-data-collector.git
+cd avd-data-collector
+```
+
+---
+
+## 🚀 Quick Start
+
+```powershell
+# Dry run — preview what will be collected (no data leaves Azure)
 .\Collect-AVDData.ps1 `
     -TenantId "your-tenant-id" `
     -SubscriptionIds @("your-sub-id") `
     -DryRun
 
-# 2. Full collection
+# Full collection — ARM + metrics + KQL
 .\Collect-AVDData.ps1 `
     -TenantId "your-tenant-id" `
     -SubscriptionIds @("your-sub-id") `
-    -LogAnalyticsWorkspaceResourceIds @("/subscriptions/.../workspaces/your-ws")
+    -LogAnalyticsWorkspaceResourceIds @(
+        "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<name>"
+    )
+```
 
-# 3. Import into Enhanced AVD Evidence Pack (optional)
-.\Get-Enhanced-AVD-EvidencePack.ps1 `
-    -CollectionPack "AVD-CollectionPack-20250601-120000.zip"
+Output: `AVD-CollectionPack-YYYYMMDD-HHMMSS.zip`
+
+---
+
+## 📋 What It Collects
+
+| Category | Data | API Source |
+|----------|------|-----------|
+| **Host Pools** | Configuration, load balancing, RDP settings | `Get-AzWvdHostPool` |
+| **Session Hosts** | Status, agent version, health, active sessions | `Get-AzWvdSessionHost` |
+| **Virtual Machines** | Size, OS, zones, disks, NICs, security profile, extensions | `Get-AzVM` |
+| **VM Scale Sets** | VMSS config + individual instance details | `Get-AzVmss` |
+| **Application Groups** | App group types, host pool assignments | `Get-AzWvdApplicationGroup` |
+| **Scaling Plans** | Autoscale definitions, schedules, pool assignments | ARM API |
+| **Metrics** | CPU, memory, disk IOPS per VM (configurable lookback) | `Get-AzMetric` |
+| **Log Analytics** | 36 KQL queries — connections, errors, profiles, Shortpath, agent health | `Invoke-AzOperationalInsightsQuery` |
+| **Capacity Reservations** | CRG utilization, allocated vs used capacity | ARM REST API |
+| **Quota Usage** | Per-region vCPU quota (current / limit) | `Get-AzVMUsage` |
+
+---
+
+## 🔒 Security & Privacy
+
+| Guarantee | Detail |
+|-----------|--------|
+| **Read-only** | Only read operations — your environment is never modified |
+| **No external calls** | All data stays local. Nothing is sent to any external service |
+| **Transparent** | Plain JSON output — inspect, filter, or redact anything before sharing |
+| **PII Scrubbing** | Optional `-ScrubPII` flag anonymizes all identifiers before export |
+
+### PII Scrubbing
+
+Add `-ScrubPII` to anonymize VM names, host pool names, usernames, IPs, subscription IDs, resource groups, and ARM resource IDs. Uses SHA256 hashing with a per-run salt — same entity always maps to the same anonymous ID so correlations are preserved for analysis.
+
+```powershell
+.\Collect-AVDData.ps1 `
+    -TenantId "your-tenant-id" `
+    -SubscriptionIds @("your-sub-id") `
+    -LogAnalyticsWorkspaceResourceIds @("/subscriptions/.../workspaces/your-ws") `
+    -ScrubPII
 ```
 
 ---
 
-## Requirements
+## 📦 Requirements
 
 | Requirement | Details |
 |-------------|---------|
-| **PowerShell** | 7.2+ (required) |
-| **Az Modules** | Az.Accounts, Az.Compute, Az.DesktopVirtualization, Az.Monitor, Az.OperationalInsights, Az.Resources |
-| **Azure RBAC** | Reader on target subscriptions (minimum) |
-| **Optional** | Az.Reservations for capacity reservation data |
+| **PowerShell** | 7.2+ (`pwsh.exe`, not `powershell.exe`) |
+| **Az Modules** | `Az.Accounts`, `Az.Compute`, `Az.DesktopVirtualization`, `Az.Monitor`, `Az.OperationalInsights`, `Az.Resources` |
+| **Azure RBAC** | **Reader** on AVD subscriptions + **Log Analytics Reader** on workspaces |
+
+Install the Az modules if you don't have them:
+
+```powershell
+Install-Module Az.Accounts, Az.Compute, Az.DesktopVirtualization, Az.Monitor, Az.OperationalInsights, Az.Resources -Scope CurrentUser
+```
 
 ---
 
-## Parameters
+## ⚙️ Parameters
 
 ### Required
 
@@ -71,7 +120,7 @@ Collects ARM resource inventory, Azure Monitor metrics, and Log Analytics (KQL) 
 
 | Parameter | Description |
 |-----------|-------------|
-| `-LogAnalyticsWorkspaceResourceIds` | Log Analytics workspace resource IDs for KQL queries |
+| `-LogAnalyticsWorkspaceResourceIds` | Workspace resource IDs for KQL queries |
 
 ### Collection Control
 
@@ -79,16 +128,17 @@ Collects ARM resource inventory, Azure Monitor metrics, and Log Analytics (KQL) 
 |-----------|---------|-------------|
 | `-SkipAzureMonitorMetrics` | `$false` | Skip CPU/memory/disk metric collection |
 | `-SkipLogAnalyticsQueries` | `$false` | Skip all KQL queries |
-| `-MetricsLookbackDays` | `7` | Days of metrics history to collect (1–30) |
-| `-MetricsTimeGrainMinutes` | `15` | Metric aggregation interval (5/15/30/60) |
+| `-MetricsLookbackDays` | `7` | Days of metrics history (1–30) |
+| `-MetricsTimeGrainMinutes` | `15` | Aggregation interval (5/15/30/60 min) |
 | `-IncludeCapacityReservations` | `$false` | Collect capacity reservation group data |
 | `-IncludeQuotaUsage` | `$false` | Collect per-region vCPU quota data |
+| `-ScrubPII` | `$false` | Anonymize all identifiable data before export |
 
 ### Incident Window
 
 | Parameter | Description |
 |-----------|-------------|
-| `-IncludeIncidentWindow` | Collect a second set of metrics for an incident period |
+| `-IncludeIncidentWindow` | Collect a second set of metrics for a specific incident period |
 | `-IncidentWindowStart` | Start of incident window (datetime) |
 | `-IncidentWindowEnd` | End of incident window (datetime) |
 
@@ -97,126 +147,117 @@ Collects ARM resource inventory, Azure Monitor metrics, and Log Analytics (KQL) 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `-DryRun` | `$false` | Preview collection scope without running |
-| `-SkipDisclaimer` | `$false` | Skip interactive disclaimer prompt |
-| `-OutputPath` | Current directory | Where to write the collection pack |
+| `-SkipDisclaimer` | `$false` | Skip the interactive disclaimer prompt |
+| `-OutputPath` | `.` | Directory for the output collection pack |
 
 ---
 
-## Output
+## 📊 Output
 
-The collector produces a ZIP file containing JSON data files:
+The collector produces a ZIP containing JSON data files:
 
 ```
-AVD-CollectionPack-20250601-120000/
-├── collection-metadata.json         # Schema, parameters, counts
+AVD-CollectionPack-20260225-120000/
+├── collection-metadata.json         # Schema version, parameters, counts
 ├── host-pools.json                  # Host pool configurations
 ├── session-hosts.json               # Session host status & health
-├── virtual-machines.json            # VM inventory with full detail
+├── virtual-machines.json            # Full VM inventory
 ├── metrics-baseline.json            # Azure Monitor metric datapoints
-├── metrics-incident.json            # Incident window metrics (if collected)
+├── metrics-incident.json            # Incident window metrics (if requested)
 ├── la-results.json                  # All KQL query results
 ├── scaling-plans.json               # Autoscale plan definitions
 ├── scaling-plan-assignments.json    # Plan-to-pool assignments
-├── scaling-plan-schedules.json      # Schedule details
+├── scaling-plan-schedules.json      # Schedule details per plan
 ├── app-groups.json                  # Application groups
 ├── vmss.json                        # VM Scale Set configurations
 ├── vmss-instances.json              # VMSS instance details
-├── capacity-reservation-groups.json # CRG utilization (if collected)
-└── quota-usage.json                 # vCPU quota data (if collected)
+├── capacity-reservation-groups.json # CRG utilization (if requested)
+└── quota-usage.json                 # vCPU quota (if requested)
 ```
 
-### Schema Version
-
-The collection pack uses schema version `1.1`, compatible with [Enhanced AVD Evidence Pack](https://github.com/intrepidtechie/enhanced-avd-evidence-pack) v4.12.0+.
-
 ---
 
-## KQL Queries (36)
+## 🔍 KQL Queries (36)
 
-All queries are in the `queries/` directory and can be customized. Categories:
+All queries live in `queries/` and can be customized. Categories:
 
-| Category | Queries |
-|----------|---------|
-| **Connections** | Connection summary, success rate, login time, session duration, peak/hourly concurrency |
-| **Errors** | Error classification, connection errors, disconnect reasons |
+| Category | What It Captures |
+|----------|-----------------|
+| **Connections** | Summary, success rate, login time, session duration, peak & hourly concurrency |
+| **Errors** | Error classification, connection failures, disconnect reasons |
 | **Disconnects** | By host, heatmap, CPU correlation, reconnection loops |
-| **Network** | Connection quality (RTT/bandwidth), cross-region, Shortpath usage/effectiveness/transport |
-| **Performance** | Process CPU/memory, CPU percentiles per host |
-| **Profiles** | Profile load performance, checkpoint login decomposition |
-| **Agent Health** | Health status, version distribution, health checks |
-| **Autoscale** | Autoscale activity, detailed evaluation per pool |
-| **Environment** | Connection environment (OS, join type), table discovery |
-| **Multi-Link** | Multi-link transport types and distribution |
+| **Network** | RTT/bandwidth quality, cross-region, Shortpath usage/effectiveness/transport |
+| **Performance** | Process CPU/memory consumption, CPU percentiles per host |
+| **Profiles** | FSLogix profile load performance, checkpoint login decomposition |
+| **Agent Health** | RD Agent status, version distribution, health check results |
+| **Autoscale** | Scaling activity, detailed evaluation per host pool |
+| **Environment** | Client OS, identity join type, table discovery |
+| **Transport** | Multi-link transport negotiation and distribution |
 
 ---
 
-## Collection Pack Compatibility
+## 🔗 Use With Enhanced AVD Evidence Pack
 
-The output is designed as a drop-in data source for the [Enhanced AVD Evidence Pack](https://github.com/intrepidtechie/enhanced-avd-evidence-pack):
+The collection pack is a drop-in data source for offline analysis:
 
 ```powershell
-# Collect data (this tool)
+# 1. Customer runs the collector
 .\Collect-AVDData.ps1 -TenantId $t -SubscriptionIds $s -LogAnalyticsWorkspaceResourceIds $w
 
-# Analyze offline (Enhanced AVD Evidence Pack)
+# 2. Send the ZIP to your consultant
+
+# 3. Consultant analyzes offline — no Azure credentials needed
 .\Get-Enhanced-AVD-EvidencePack.ps1 -CollectionPack "AVD-CollectionPack-*.zip"
 ```
 
-This separation enables workflows where:
-- Someone with Azure access runs the collector
-- A consultant analyzes the data offline — no Azure credentials needed
-- The same pack can be re-analyzed with updated tooling
-- Data can be archived for audit or comparison
+This separation enables:
+- **Delegated collection** — someone with Azure access runs the collector; a consultant analyzes offline
+- **Privacy control** — use `-ScrubPII` to anonymize before sharing
+- **Repeatability** — re-analyze the same data with updated tooling
+- **Archival** — keep collection packs for historical comparison
 
 ---
 
-## Runtime Estimates
+## ⏱️ Runtime Estimates
 
-| Environment | VMs | Estimated Time |
-|-------------|-----|----------------|
+| Environment Size | VMs | Estimated Time |
+|-----------------|-----|----------------|
 | Small | ~50 | 3–5 min |
 | Medium | ~200 | 8–15 min |
 | Large | ~500 | 15–25 min |
-| Very Large | ~1500+ | 30–60 min |
+| Very Large | 1500+ | 30–60 min |
 
-Metrics collection is the primary time driver. Use `-SkipAzureMonitorMetrics` for faster inventory-only runs (~2–5 min regardless of size).
-
----
-
-## Security & Privacy
-
-- **Read-only**: The collector only uses read operations — it never modifies your Azure environment
-- **No external calls**: All data stays local. Nothing is sent to any external service
-- **Your data**: The collection pack is plain JSON files. Inspect, filter, or redact anything before sharing
+> Metrics collection is the primary time driver. Use `-SkipAzureMonitorMetrics` for inventory-only runs (~2–5 min regardless of size).
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 avd-data-collector/
-├── Collect-AVDData.ps1     # Main collector script
-├── queries/                # KQL query files (customizable)
+├── Collect-AVDData.ps1        # Main collector script
+├── Install-AVDCollector.ps1   # One-liner remote installer
+├── queries/                   # 36 KQL query files (customizable)
 │   ├── kqlTableDiscovery.kql
 │   ├── kqlWvdConnections.kql
 │   ├── kqlConnectionErrors.kql
-│   └── ... (36 queries)
-├── docs/                   # Documentation
-│   ├── QUERIES.md          # KQL query reference
-│   └── SCHEMA.md           # Collection pack schema
-├── examples/               # Usage examples
-├── LICENSE                  # MIT License
-└── CONTRIBUTING.md          # Contribution guidelines
+│   └── ...
+├── docs/                      # Documentation
+│   ├── QUERIES.md
+│   └── SCHEMA.md
+├── examples/                  # Usage examples
+├── LICENSE                    # MIT License
+└── CONTRIBUTING.md
 ```
 
 ---
 
-## License
+## 📜 License
 
 [MIT](LICENSE) — use it however you want.
 
 ---
 
-## Contributing
+## 🤝 Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. PRs welcome for new KQL queries, bug fixes, and documentation.
+See [CONTRIBUTING.md](CONTRIBUTING.md). PRs welcome for new KQL queries, bug fixes, and docs.

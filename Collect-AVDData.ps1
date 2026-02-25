@@ -1717,6 +1717,9 @@ Write-Host "  App Groups:      $(SafeCount $appGroups)" -ForegroundColor White
 if ($IncludeCapacityReservations) {
     Write-Host "  Capacity Res.:   $(SafeCount $capacityReservationGroups)" -ForegroundColor White
 }
+if ($ScrubPII) {
+    Write-Host "  PII:     Scrubbed (identifiers anonymized)" -ForegroundColor Magenta
+}
 if ($IncludeQuotaUsage) {
     Write-Host "  Quota Entries:   $(SafeCount $quotaUsage)" -ForegroundColor White
 }
