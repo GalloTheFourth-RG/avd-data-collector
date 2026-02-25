@@ -167,13 +167,26 @@ function Get-ArmIdSafe {
 
 function Write-Step {
     param([string]$Step, [string]$Message, [string]$Status = "Start")
-    switch ($Status) {
-        "Start"    { Write-Host "  $($Step): $Message" -ForegroundColor Cyan }
-        "Progress" { Write-Host "    $Message" -ForegroundColor Gray }
-        "Done"     { Write-Host "  [OK] $($Step): $Message" -ForegroundColor Green }
-        "Skip"     { Write-Host "  [SKIP] $($Step): $Message" -ForegroundColor Yellow }
-        "Warn"     { Write-Host "  [WARN] $($Step): $Message" -ForegroundColor Yellow }
-        "Error"    { Write-Host "  [ERR] $($Step): $Message" -ForegroundColor Red }
+    $prefix = switch ($Status) {
+        "Start"    { "  " }
+        "Progress" { "    " }
+        "Done"     { "  [OK] " }
+        "Skip"     { "  [SKIP] " }
+        "Warn"     { "  [WARN] " }
+        "Error"    { "  [ERR] " }
+    }
+    $color = switch ($Status) {
+        "Start"    { "Cyan" }
+        "Progress" { "Gray" }
+        "Done"     { "Green" }
+        "Skip"     { "Yellow" }
+        "Warn"     { "Yellow" }
+        "Error"    { "Red" }
+    }
+    if ($Status -eq "Progress") {
+        Write-Host "${prefix}${Message}" -ForegroundColor $color
+    } else {
+        Write-Host "${prefix}${Step} - ${Message}" -ForegroundColor $color
     }
 }
 
@@ -1345,9 +1358,9 @@ else {
         $kqlCollected = [System.Collections.Concurrent.ConcurrentBag[object]]::new()
 
         # Serialize helper functions for parallel runspaces
-        $invokeBody = ${function:Invoke-LaQuery}.ToString()
-        $safePropBody = ${function:SafeProp}.ToString()
-        $safeArrayBody = ${function:SafeArray}.ToString()
+        $invokeBody = (Get-Item "Function:\Invoke-LaQuery").ScriptBlock.ToString()
+        $safePropBody = (Get-Item "Function:\SafeProp").ScriptBlock.ToString()
+        $safeArrayBody = (Get-Item "Function:\SafeArray").ScriptBlock.ToString()
 
         $remainingQueries | ForEach-Object -Parallel {
             $kq    = $_
@@ -1357,9 +1370,9 @@ else {
             $bag   = $using:kqlCollected
 
             # Re-create helper functions in parallel runspace
-            ${function:Invoke-LaQuery} = $using:invokeBody
-            ${function:SafeProp}       = $using:safePropBody
-            ${function:SafeArray}      = $using:safeArrayBody
+            Set-Item "Function:\Invoke-LaQuery" -Value ([scriptblock]::Create($using:invokeBody))
+            Set-Item "Function:\SafeProp"       -Value ([scriptblock]::Create($using:safePropBody))
+            Set-Item "Function:\SafeArray"      -Value ([scriptblock]::Create($using:safeArrayBody))
 
             try {
                 $results = Invoke-LaQuery -WorkspaceResourceId $wsId -Label $kq.Label -Query $kq.Query -StartTime $start -EndTime $end
