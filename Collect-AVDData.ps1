@@ -494,6 +494,9 @@ $laResults              = [System.Collections.Generic.List[object]]::new()
 $capacityReservationGroups = [System.Collections.Generic.List[object]]::new()
 $quotaUsage             = [System.Collections.Generic.List[object]]::new()
 
+# Raw VM ARM IDs for metrics collection (unaffected by PII scrubbing)
+$rawVmIds               = [System.Collections.Generic.List[string]]::new()
+
 # NIC cache: batch-fetch per RG
 $nicCacheByRg = @{}
 
@@ -1017,13 +1020,17 @@ foreach ($subId in $SubscriptionIds) {
             # Zones
             $zones = if ($vm.Zones) { ($vm.Zones -join ",") } else { "" }
 
+            # Keep raw ARM ID for metrics collection (before PII scrubbing)
+            $rawId = Get-ArmIdSafe $vm
+            if ($rawId) { $rawVmIds.Add($rawId) }
+
             $vms.Add([PSCustomObject]@{
                 SubscriptionId       = Protect-SubscriptionId $subId
                 ResourceGroup        = Protect-ResourceGroup $hpRgForVm
                 HostPoolName         = Protect-HostPoolName $hpName
                 SessionHostName      = Protect-VMName $vmName
                 VMName               = Protect-VMName $vm.Name
-                VMId                 = Protect-ArmId (Get-ArmIdSafe $vm)
+                VMId                 = Protect-ArmId $rawId
                 VMSize               = $vm.HardwareProfile.VmSize
                 Region               = $vm.Location
                 Zones                = $zones
@@ -1228,7 +1235,7 @@ else {
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
     Write-Host ""
 
-    $vmIds = @($vms | Where-Object { $_.VMId } | Select-Object -ExpandProperty VMId -Unique)
+    $vmIds = @($rawVmIds | Select-Object -Unique)
     $metricsEnd   = Get-Date
     $metricsStart = $metricsEnd.AddDays(-$MetricsLookbackDays)
     $grain = [TimeSpan]::FromMinutes($MetricsTimeGrainMinutes)
