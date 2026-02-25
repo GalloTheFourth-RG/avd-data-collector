@@ -33,6 +33,10 @@
     Start of incident window (datetime)
 .PARAMETER IncidentWindowEnd
     End of incident window (datetime)
+.PARAMETER ScrubPII
+    Anonymize all identifiable data (VM names, host pool names, usernames,
+    subscription IDs, IPs, resource groups) before export. Same entity always
+    maps to the same anonymous ID within a run.
 .PARAMETER DryRun
     Preview collection scope without running
 .PARAMETER SkipDisclaimer
@@ -72,6 +76,8 @@ param(
     [datetime]$IncidentWindowStart = (Get-Date).AddDays(-14),
     [datetime]$IncidentWindowEnd = (Get-Date),
 
+    [switch]$ScrubPII,
+
     [switch]$DryRun,
     [switch]$SkipDisclaimer,
     [string]$OutputPath = "."
@@ -98,6 +104,89 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
     Write-Host ""
     Write-Host "Then run this script from pwsh.exe (not powershell.exe)" -ForegroundColor Cyan
     exit 1
+}
+
+# =========================================================
+# PII Scrubbing
+# =========================================================
+$script:piiSalt = [guid]::NewGuid().ToString().Substring(0, 8)
+$script:piiCache = @{}
+
+function Protect-Value {
+    param([string]$Value, [string]$Prefix = "Anon", [int]$Length = 4)
+    if (-not $ScrubPII) { return $Value }
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    $key = "${Prefix}:${Value}"
+    if ($script:piiCache.ContainsKey($key)) { return $script:piiCache[$key] }
+    $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+        [System.Text.Encoding]::UTF8.GetBytes("${Value}:${script:piiSalt}")
+    )
+    $short = [BitConverter]::ToString($hash[0..($Length/2)]).Replace('-','').Substring(0, $Length).ToUpper()
+    $result = "${Prefix}-${short}"
+    $script:piiCache[$key] = $result
+    return $result
+}
+
+function Protect-SubscriptionId {
+    param([string]$Value)
+    if (-not $ScrubPII) { return $Value }
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    if ($Value.Length -ge 4) { return "****-****-****-" + $Value.Substring($Value.Length - 4) }
+    return "****"
+}
+
+function Protect-VMName       { param([string]$Value); return (Protect-Value -Value $Value -Prefix "Host" -Length 6) }
+function Protect-HostPoolName { param([string]$Value); return (Protect-Value -Value $Value -Prefix "Pool" -Length 4) }
+function Protect-ResourceGroup { param([string]$Value); return (Protect-Value -Value $Value -Prefix "RG" -Length 4) }
+function Protect-Username     { param([string]$Value); return (Protect-Value -Value $Value -Prefix "User" -Length 4) }
+function Protect-IP {
+    param([string]$Value)
+    if (-not $ScrubPII) { return $Value }
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    if ($Value -match '^(\d+\.\d+\.\d+)\.\d+$') { return "$($matches[1]).x" }
+    return "x.x.x.x"
+}
+function Protect-ArmId {
+    param([string]$Value)
+    if (-not $ScrubPII) { return $Value }
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    return (Protect-Value -Value $Value -Prefix "ArmId" -Length 8)
+}
+function Protect-SubnetId {
+    param([string]$Value)
+    if (-not $ScrubPII) { return $Value }
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    return (Protect-Value -Value $Value -Prefix "Subnet" -Length 6)
+}
+
+# Scrub known PII columns in KQL result rows
+function Scrub-KqlRow {
+    param([PSCustomObject]$Row)
+    if (-not $ScrubPII) { return }
+    foreach ($p in @($Row.PSObject.Properties)) {
+        if ($null -eq $p.Value -or $p.Value -eq '') { continue }
+        $val = [string]$p.Value
+        switch -Regex ($p.Name) {
+            '^(UserName|UserPrincipalName|UserId|User|UserDisplayName|ActiveDirectoryUserName)$' {
+                $Row.$($p.Name) = Protect-Username $val; break
+            }
+            '^(SessionHostName|_ResourceId|Computer|ComputerName|ResourceId)$' {
+                $Row.$($p.Name) = Protect-VMName $val; break
+            }
+            '^(ClientIP|ClientPublicIP|SourceIP|PrivateIP)$' {
+                $Row.$($p.Name) = Protect-IP $val; break
+            }
+            '^(SubscriptionId|subscriptionId)$' {
+                $Row.$($p.Name) = Protect-SubscriptionId $val; break
+            }
+            '^(HostPool|HostPoolName)$' {
+                $Row.$($p.Name) = Protect-HostPoolName $val; break
+            }
+            '^(ResourceGroup|ResourceGroupName)$' {
+                $Row.$($p.Name) = Protect-ResourceGroup $val; break
+            }
+        }
+    }
 }
 
 # =========================================================
@@ -551,37 +640,37 @@ function Expand-ScalingPlanEvidence {
     $props  = $PlanResource.Properties
 
     $scalingPlans.Add([PSCustomObject]@{
-        SubscriptionId  = $SubId
-        ResourceGroup   = $rg
-        ScalingPlanName = $name
+        SubscriptionId  = Protect-SubscriptionId $SubId
+        ResourceGroup   = Protect-ResourceGroup $rg
+        ScalingPlanName = Protect-Value -Value $name -Prefix "SPlan" -Length 4
         Location        = $loc
         TimeZone        = SafeProp $props 'timeZone'
         HostPoolType    = SafeProp $props 'hostPoolType'
-        Description     = SafeProp $props 'description'
-        FriendlyName    = SafeProp $props 'friendlyName'
+        Description     = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $props 'description' }
+        FriendlyName    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $props 'friendlyName' }
         ExclusionTag    = SafeProp $props 'exclusionTag'
-        Id              = $planId
+        Id              = Protect-ArmId $planId
     })
 
     foreach ($hpr in SafeArray $props.hostPoolReferences) {
         $hpArmId = SafeProp $hpr 'hostPoolArmPath'
         $scalingPlanAssignments.Add([PSCustomObject]@{
-            SubscriptionId      = $SubId
-            ResourceGroup       = $rg
-            ScalingPlanName     = $name
-            ScalingPlanId       = $planId
-            HostPoolArmId       = $hpArmId
-            HostPoolName        = (Get-NameFromArmId $hpArmId)
+            SubscriptionId      = Protect-SubscriptionId $SubId
+            ResourceGroup       = Protect-ResourceGroup $rg
+            ScalingPlanName     = Protect-Value -Value $name -Prefix "SPlan" -Length 4
+            ScalingPlanId       = Protect-ArmId $planId
+            HostPoolArmId       = Protect-ArmId $hpArmId
+            HostPoolName        = Protect-HostPoolName (Get-NameFromArmId $hpArmId)
             IsEnabled           = SafeProp $hpr 'scalingPlanEnabled'
         })
     }
 
     foreach ($sch in SafeArray $props.schedules) {
         $scalingPlanSchedules.Add([PSCustomObject]@{
-            SubscriptionId        = $SubId
-            ResourceGroup         = $rg
-            ScalingPlanName       = $name
-            ScalingPlanId         = $planId
+            SubscriptionId        = Protect-SubscriptionId $SubId
+            ResourceGroup         = Protect-ResourceGroup $rg
+            ScalingPlanName       = Protect-Value -Value $name -Prefix "SPlan" -Length 4
+            ScalingPlanId         = Protect-ArmId $planId
             ScheduleName          = SafeProp $sch 'name'
             DaysOfWeek            = ((SafeArray (SafeProp $sch 'daysOfWeek')) -join ",")
             RampUpStartTime       = SafeProp $sch 'rampUpStartTime'
@@ -597,7 +686,7 @@ function Expand-ScalingPlanEvidence {
             OffPeakMinHostsPct    = SafeProp $sch 'offPeakMinimumHostsPct'
             RampDownForceLogoff   = SafeProp $sch 'rampDownForceLogoffUsers'
             RampDownLogoffTimeout = SafeProp $sch 'rampDownWaitTimeMinutes'
-            RampDownNotification  = SafeProp $sch 'rampDownNotificationMessage'
+            RampDownNotification  = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $sch 'rampDownNotificationMessage' }
         })
     }
 }
@@ -606,6 +695,12 @@ function Expand-ScalingPlanEvidence {
 # STEP 1: Collect ARM Resources
 # =========================================================
 Write-Host ""
+if ($ScrubPII) {
+    Write-Host "  ╔═══════════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
+    Write-Host "  ║  PII SCRUBBING ENABLED — identifiers will be anonymized      ║" -ForegroundColor Magenta
+    Write-Host "  ╚═══════════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
+    Write-Host ""
+}
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 Write-Host "  Step 1 of $(if ($SkipAzureMonitorMetrics) { '3' } else { '4' }): Collecting ARM Resources" -ForegroundColor Cyan
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
@@ -693,9 +788,9 @@ foreach ($subId in $SubscriptionIds) {
         $hpRg = if ($hpId) { ($hpId -split '/')[4] } else { "" }
 
         $hostPools.Add([PSCustomObject]@{
-            SubscriptionId       = $subId
-            ResourceGroup        = $hpRg
-            HostPoolName         = $hpName
+            SubscriptionId       = Protect-SubscriptionId $subId
+            ResourceGroup        = Protect-ResourceGroup $hpRg
+            HostPoolName         = Protect-HostPoolName $hpName
             HostPoolType         = SafeArmProp $hp 'HostPoolType'
             LoadBalancer         = SafeArmProp $hp 'LoadBalancerType'
             MaxSessions          = SafeArmProp $hp 'MaxSessionLimit'
@@ -703,8 +798,8 @@ foreach ($subId in $SubscriptionIds) {
             PreferredAppGroupType = SafeArmProp $hp 'PreferredAppGroupType'
             Location             = $hp.Location
             ValidationEnv        = SafeArmProp $hp 'ValidationEnvironment'
-            CustomRdpProperty    = SafeArmProp $hp 'CustomRdpProperty'
-            Id                   = $hpId
+            CustomRdpProperty    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeArmProp $hp 'CustomRdpProperty' }
+            Id                   = Protect-ArmId $hpId
         })
 
         # Session Hosts
@@ -725,15 +820,15 @@ foreach ($subId in $SubscriptionIds) {
             $vmName = ($shSimpleName -split '\.')[0]
 
             $sessionHosts.Add([PSCustomObject]@{
-                SubscriptionId    = $subId
-                ResourceGroup     = $hpRg
-                HostPoolName      = $hpName
-                SessionHostName   = $shSimpleName
-                SessionHostArmName = $shName
+                SubscriptionId    = Protect-SubscriptionId $subId
+                ResourceGroup     = Protect-ResourceGroup $hpRg
+                HostPoolName      = Protect-HostPoolName $hpName
+                SessionHostName   = Protect-VMName $shSimpleName
+                SessionHostArmName = Protect-ArmId $shName
                 Status            = SafeArmProp $sh 'Status'
                 AllowNewSession   = SafeArmProp $sh 'AllowNewSession'
                 ActiveSessions    = SafeArmProp $sh 'Session'
-                AssignedUser      = SafeArmProp $sh 'AssignedUser'
+                AssignedUser      = Protect-Username (SafeArmProp $sh 'AssignedUser')
                 UpdateState       = SafeArmProp $sh 'UpdateState'
                 LastHeartBeat     = SafeArmProp $sh 'LastHeartBeat'
             })
@@ -923,12 +1018,12 @@ foreach ($subId in $SubscriptionIds) {
             $zones = if ($vm.Zones) { ($vm.Zones -join ",") } else { "" }
 
             $vms.Add([PSCustomObject]@{
-                SubscriptionId       = $subId
-                ResourceGroup        = $hpRgForVm
-                HostPoolName         = $hpName
-                SessionHostName      = $vmName
-                VMName               = $vm.Name
-                VMId                 = Get-ArmIdSafe $vm
+                SubscriptionId       = Protect-SubscriptionId $subId
+                ResourceGroup        = Protect-ResourceGroup $hpRgForVm
+                HostPoolName         = Protect-HostPoolName $hpName
+                SessionHostName      = Protect-VMName $vmName
+                VMName               = Protect-VMName $vm.Name
+                VMId                 = Protect-ArmId (Get-ArmIdSafe $vm)
                 VMSize               = $vm.HardwareProfile.VmSize
                 Region               = $vm.Location
                 Zones                = $zones
@@ -940,12 +1035,12 @@ foreach ($subId in $SubscriptionIds) {
                 ImageOffer           = $imageOffer
                 ImageSku             = $imageSku
                 ImageVersion         = $imageVersion
-                ImageId              = $imageId
+                ImageId              = Protect-ArmId $imageId
                 ImageSource          = $imageSource
                 AccelNetEnabled      = $accelNetEnabled
-                SubnetId             = $nicSubnetId
-                NsgId                = $nicNsgId
-                PrivateIp            = $nicPrivateIp
+                SubnetId             = Protect-SubnetId $nicSubnetId
+                NsgId                = Protect-ArmId $nicNsgId
+                PrivateIp            = Protect-IP $nicPrivateIp
                 SecurityType         = $securityType
                 SecureBoot           = $secureBoot
                 VTpm                 = $vtpm
@@ -959,7 +1054,7 @@ foreach ($subId in $SubscriptionIds) {
                 HasDiskEncryption    = $hasDiskEncryption
                 LicenseType          = $vmLicenseType
                 OSDiskEncryptionType = $osDiskEncryptionType
-                Tags                 = $vm.Tags
+                Tags                 = if ($ScrubPII) { $null } else { $vm.Tags }
                 TimeCreated          = try { $vm.TimeCreated } catch { $null }
             })
         }
@@ -974,14 +1069,14 @@ foreach ($subId in $SubscriptionIds) {
             if (-not $agName) { $agName = $ag.Name }
             $agHpPath = SafeArmProp $ag 'HostPoolArmPath'
             $appGroups.Add([PSCustomObject]@{
-                SubscriptionId = $subId
-                ResourceGroup  = if ($ag.Id) { ($ag.Id -split '/')[4] } else { "" }
-                AppGroupName   = $agName
+                SubscriptionId = Protect-SubscriptionId $subId
+                ResourceGroup  = Protect-ResourceGroup (if ($ag.Id) { ($ag.Id -split '/')[4] } else { "" })
+                AppGroupName   = Protect-Value -Value $agName -Prefix "AppGrp" -Length 4
                 AppGroupType   = SafeArmProp $ag 'ApplicationGroupType'
-                HostPoolArmPath = $agHpPath
-                HostPoolName   = Get-NameFromArmId $agHpPath
-                FriendlyName   = SafeArmProp $ag 'FriendlyName'
-                Description    = SafeArmProp $ag 'Description'
+                HostPoolArmPath = Protect-ArmId $agHpPath
+                HostPoolName   = Protect-HostPoolName (Get-NameFromArmId $agHpPath)
+                FriendlyName   = if ($ScrubPII) { '[SCRUBBED]' } else { SafeArmProp $ag 'FriendlyName' }
+                Description    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeArmProp $ag 'Description' }
             })
         }
     }
@@ -1011,10 +1106,10 @@ foreach ($subId in $SubscriptionIds) {
             $vmssId   = Get-ArmIdSafe $vmssObj
 
             $vmss.Add([PSCustomObject]@{
-                SubscriptionId = $subId
-                ResourceGroup  = $vmssRg
-                VMSSName       = $vmssName
-                VMSSId         = $vmssId
+                SubscriptionId = Protect-SubscriptionId $subId
+                ResourceGroup  = Protect-ResourceGroup $vmssRg
+                VMSSName       = Protect-Value -Value $vmssName -Prefix "VMSS" -Length 4
+                VMSSId         = Protect-ArmId $vmssId
                 VMSize         = $vmssObj.Sku.Name
                 Capacity       = $vmssObj.Sku.Capacity
                 Location       = $vmssObj.Location
@@ -1037,11 +1132,11 @@ foreach ($subId in $SubscriptionIds) {
                     catch { }
 
                     $vmssInstances.Add([PSCustomObject]@{
-                        SubscriptionId = $subId
-                        ResourceGroup  = $vmssRg
-                        VMSSName       = $vmssName
+                        SubscriptionId = Protect-SubscriptionId $subId
+                        ResourceGroup  = Protect-ResourceGroup $vmssRg
+                        VMSSName       = Protect-Value -Value $vmssName -Prefix "VMSS" -Length 4
                         InstanceId     = $instId
-                        Name           = $inst.Name
+                        Name           = Protect-VMName $inst.Name
                         VMSize         = if ($inst.Sku) { $inst.Sku.Name } else { $vmssObj.Sku.Name }
                         PowerState     = $instPower
                         Location       = $inst.Location
@@ -1083,10 +1178,10 @@ foreach ($subId in $SubscriptionIds) {
                                     $vmRefs = @($crProps.virtualMachinesAssociated | ForEach-Object { $_.id })
                                 }
                                 $capacityReservationGroups.Add([PSCustomObject]@{
-                                    SubscriptionId     = $subId
-                                    GroupName          = $crgName
-                                    GroupId            = $crgId
-                                    ReservationName    = $cr.name
+                                    SubscriptionId     = Protect-SubscriptionId $subId
+                                    GroupName          = Protect-Value -Value $crgName -Prefix "CRG" -Length 4
+                                    GroupId            = Protect-ArmId $crgId
+                                    ReservationName    = Protect-Value -Value $cr.name -Prefix "CRes" -Length 4
                                     Location           = $cr.location
                                     Zones              = if ($cr.zones) { ($cr.zones -join ",") } else { "" }
                                     SKU                = if ($cr.sku) { $cr.sku.name } else { "" }
@@ -1094,7 +1189,7 @@ foreach ($subId in $SubscriptionIds) {
                                     ProvisioningState  = SafeProp $crProps 'provisioningState'
                                     ProvisioningTime   = SafeProp $crProps 'provisioningTime'
                                     UtilizedVMs        = $vmRefs.Count
-                                    VMReferences       = ($vmRefs -join ";")
+                                    VMReferences       = if ($ScrubPII) { '[SCRUBBED]' } else { ($vmRefs -join ";") }
                                 })
                             }
                         }
@@ -1240,8 +1335,9 @@ else {
         [System.Threading.Interlocked]::Increment($processed) | Out-Null
     } -ThrottleLimit 15
 
-    # Move from ConcurrentBag to List
+    # Move from ConcurrentBag to List (and scrub VmId if needed)
     foreach ($item in $metricsCollected) {
+        if ($ScrubPII) { $item.VmId = Protect-ArmId $item.VmId }
         $vmMetrics.Add($item)
     }
 
@@ -1295,6 +1391,7 @@ else {
         } -ThrottleLimit 15
 
         foreach ($item in $incidentCollected) {
+            if ($ScrubPII) { $item.VmId = Protect-ArmId $item.VmId }
             $vmMetricsIncident.Add($item)
         }
 
@@ -1392,7 +1489,13 @@ else {
         $tdQuery = $queryDispatchList | Where-Object { $_.Label -eq "CurrentWindow_TableDiscovery" } | Select-Object -First 1
         if ($tdQuery) {
             $tdResult = Invoke-LaQuery -WorkspaceResourceId $wsId -Label $tdQuery.Label -Query $tdQuery.Query -StartTime $queryStart -EndTime $queryEnd
-            foreach ($r in SafeArray $tdResult) { $laResults.Add($r) }
+            foreach ($r in SafeArray $tdResult) {
+                if ($ScrubPII) {
+                    $r.WorkspaceResourceId = Protect-ArmId $r.WorkspaceResourceId
+                    Scrub-KqlRow $r
+                }
+                $laResults.Add($r)
+            }
 
             $tdStatus = ($tdResult | Where-Object { $_.PSObject.Properties.Name -contains 'Status' } | Select-Object -First 1)
             if ($tdStatus -and $tdStatus.Status -in @("WorkspaceNotFound", "QueryFailed", "InvalidWorkspaceId")) {
@@ -1445,6 +1548,10 @@ else {
         } -ThrottleLimit 5
 
         foreach ($item in $kqlCollected) {
+            if ($ScrubPII) {
+                $item.WorkspaceResourceId = Protect-ArmId $item.WorkspaceResourceId
+                Scrub-KqlRow $item
+            }
             $laResults.Add($item)
         }
 
@@ -1547,13 +1654,14 @@ $metadata = [PSCustomObject]@{
     SchemaVersion            = $script:SchemaVersion
     ScriptVersion            = $script:ScriptVersion
     CollectionTimestamp      = (Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")
-    SubscriptionIds          = $SubscriptionIds
-    TenantId                 = $TenantId
+    SubscriptionIds          = @($SubscriptionIds | ForEach-Object { Protect-SubscriptionId $_ })
+    TenantId                 = if ($ScrubPII) { '****-****-****' } else { $TenantId }
     MetricsLookbackDays      = $MetricsLookbackDays
     IncidentWindowQueried    = [bool]$IncludeIncidentWindow
     SkipAzureMonitorMetrics  = [bool]$SkipAzureMonitorMetrics
     SkipLogAnalyticsQueries  = [bool]$SkipLogAnalyticsQueries
     SkipActualCosts          = $true  # This collector doesn't collect cost data
+    PIIScrubbed              = [bool]$ScrubPII
     Counts                   = [PSCustomObject]@{
         HostPools    = SafeCount $hostPools
         SessionHosts = SafeCount $sessionHosts
