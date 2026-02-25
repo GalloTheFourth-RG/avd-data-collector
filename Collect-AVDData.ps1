@@ -860,7 +860,7 @@ foreach ($subId in $SubscriptionIds) {
             $nicPrivateIp  = $null
             $accelNetEnabled = $false
             $nicRefs = $vm.NetworkProfile.NetworkInterfaces
-            if ($nicRefs -and $nicRefs.Count -gt 0) {
+            if ($nicRefs -and @($nicRefs).Count -gt 0) {
                 $nicId = $nicRefs[0].Id
                 if ($nicId) {
                     $nicIdParts = $nicId -split '/'
@@ -907,12 +907,12 @@ foreach ($subId in $SubscriptionIds) {
                 $t
             })
 
-            $hasAadExtension      = ($extTypes | Where-Object { $_ -match 'AADLoginForWindows|AADIntuneLogin|AADJ' }).Count -gt 0
-            $hasAmaAgent          = ($extTypes | Where-Object { $_ -match 'AzureMonitorWindowsAgent|AzureMonitorLinuxAgent|AMA' }).Count -gt 0
-            $hasMmaAgent          = ($extTypes | Where-Object { $_ -match 'MicrosoftMonitoringAgent|OmsAgentForLinux|MMA' }).Count -gt 0
-            $hasEndpointProtection = ($extTypes | Where-Object { $_ -match 'MDE|EndpointSecurity|IaaSAntimalware|Antimalware|WindowsDefender' }).Count -gt 0
-            $hasGuestConfig       = ($extTypes | Where-Object { $_ -match 'ConfigurationforWindows|ConfigurationforLinux|GuestConfig' }).Count -gt 0
-            $hasDiskEncryption    = ($extTypes | Where-Object { $_ -match 'AzureDiskEncryption' }).Count -gt 0
+            $hasAadExtension      = @($extTypes | Where-Object { $_ -match 'AADLoginForWindows|AADIntuneLogin|AADJ' }).Count -gt 0
+            $hasAmaAgent          = @($extTypes | Where-Object { $_ -match 'AzureMonitorWindowsAgent|AzureMonitorLinuxAgent|AMA' }).Count -gt 0
+            $hasMmaAgent          = @($extTypes | Where-Object { $_ -match 'MicrosoftMonitoringAgent|OmsAgentForLinux|MMA' }).Count -gt 0
+            $hasEndpointProtection = @($extTypes | Where-Object { $_ -match 'MDE|EndpointSecurity|IaaSAntimalware|Antimalware|WindowsDefender' }).Count -gt 0
+            $hasGuestConfig       = @($extTypes | Where-Object { $_ -match 'ConfigurationforWindows|ConfigurationforLinux|GuestConfig' }).Count -gt 0
+            $hasDiskEncryption    = @($extTypes | Where-Object { $_ -match 'AzureDiskEncryption' }).Count -gt 0
 
             # License type
             $vmLicenseType = SafeProp $vm 'LicenseType'
