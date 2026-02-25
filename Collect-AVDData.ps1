@@ -646,8 +646,8 @@ function Expand-ScalingPlanEvidence {
         Location        = $loc
         TimeZone        = SafeProp $props 'timeZone'
         HostPoolType    = SafeProp $props 'hostPoolType'
-        Description     = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $props 'description' }
-        FriendlyName    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $props 'friendlyName' }
+        Description     = $(if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $props 'description' })
+        FriendlyName    = $(if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $props 'friendlyName' })
         ExclusionTag    = SafeProp $props 'exclusionTag'
         Id              = Protect-ArmId $planId
     })
@@ -686,7 +686,7 @@ function Expand-ScalingPlanEvidence {
             OffPeakMinHostsPct    = SafeProp $sch 'offPeakMinimumHostsPct'
             RampDownForceLogoff   = SafeProp $sch 'rampDownForceLogoffUsers'
             RampDownLogoffTimeout = SafeProp $sch 'rampDownWaitTimeMinutes'
-            RampDownNotification  = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $sch 'rampDownNotificationMessage' }
+            RampDownNotification  = $(if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $sch 'rampDownNotificationMessage' })
         })
     }
 }
@@ -798,7 +798,7 @@ foreach ($subId in $SubscriptionIds) {
             PreferredAppGroupType = SafeArmProp $hp 'PreferredAppGroupType'
             Location             = $hp.Location
             ValidationEnv        = SafeArmProp $hp 'ValidationEnvironment'
-            CustomRdpProperty    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeArmProp $hp 'CustomRdpProperty' }
+            CustomRdpProperty    = $(if ($ScrubPII) { '[SCRUBBED]' } else { SafeArmProp $hp 'CustomRdpProperty' })
             Id                   = Protect-ArmId $hpId
         })
 
@@ -1054,7 +1054,7 @@ foreach ($subId in $SubscriptionIds) {
                 HasDiskEncryption    = $hasDiskEncryption
                 LicenseType          = $vmLicenseType
                 OSDiskEncryptionType = $osDiskEncryptionType
-                Tags                 = if ($ScrubPII) { $null } else { $vm.Tags }
+                Tags                 = $(if ($ScrubPII) { $null } else { $vm.Tags })
                 TimeCreated          = try { $vm.TimeCreated } catch { $null }
             })
         }
@@ -1070,13 +1070,13 @@ foreach ($subId in $SubscriptionIds) {
             $agHpPath = SafeArmProp $ag 'HostPoolArmPath'
             $appGroups.Add([PSCustomObject]@{
                 SubscriptionId = Protect-SubscriptionId $subId
-                ResourceGroup  = Protect-ResourceGroup (if ($ag.Id) { ($ag.Id -split '/')[4] } else { "" })
+                ResourceGroup  = Protect-ResourceGroup $(if ($ag.Id) { ($ag.Id -split '/')[4] } else { "" })
                 AppGroupName   = Protect-Value -Value $agName -Prefix "AppGrp" -Length 4
                 AppGroupType   = SafeArmProp $ag 'ApplicationGroupType'
                 HostPoolArmPath = Protect-ArmId $agHpPath
                 HostPoolName   = Protect-HostPoolName (Get-NameFromArmId $agHpPath)
-                FriendlyName   = if ($ScrubPII) { '[SCRUBBED]' } else { SafeArmProp $ag 'FriendlyName' }
-                Description    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeArmProp $ag 'Description' }
+                FriendlyName   = $(if ($ScrubPII) { '[SCRUBBED]' } else { SafeArmProp $ag 'FriendlyName' })
+                Description    = $(if ($ScrubPII) { '[SCRUBBED]' } else { SafeArmProp $ag 'Description' })
             })
         }
     }
@@ -1189,7 +1189,7 @@ foreach ($subId in $SubscriptionIds) {
                                     ProvisioningState  = SafeProp $crProps 'provisioningState'
                                     ProvisioningTime   = SafeProp $crProps 'provisioningTime'
                                     UtilizedVMs        = $vmRefs.Count
-                                    VMReferences       = if ($ScrubPII) { '[SCRUBBED]' } else { ($vmRefs -join ";") }
+                                    VMReferences       = $(if ($ScrubPII) { '[SCRUBBED]' } else { ($vmRefs -join ";") })
                                 })
                             }
                         }
@@ -1655,7 +1655,7 @@ $metadata = [PSCustomObject]@{
     ScriptVersion            = $script:ScriptVersion
     CollectionTimestamp      = (Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")
     SubscriptionIds          = @($SubscriptionIds | ForEach-Object { Protect-SubscriptionId $_ })
-    TenantId                 = if ($ScrubPII) { '****-****-****' } else { $TenantId }
+    TenantId                 = $(if ($ScrubPII) { '****-****-****' } else { $TenantId })
     MetricsLookbackDays      = $MetricsLookbackDays
     IncidentWindowQueried    = [bool]$IncludeIncidentWindow
     SkipAzureMonitorMetrics  = [bool]$SkipAzureMonitorMetrics
