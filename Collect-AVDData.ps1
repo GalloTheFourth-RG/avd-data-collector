@@ -264,31 +264,59 @@ $isManagedIdentity = $existingContext -and $existingContext.Account.Type -eq 'Ma
 
 if ($isManagedIdentity) {
     Write-Host "  ✓ Using existing Managed Identity connection" -ForegroundColor Green
+    Write-Host "    Tenant: $($existingContext.Tenant.Id)" -ForegroundColor Gray
 }
 elseif ($existingContext -and $existingContext.Account -and $existingContext.Tenant.Id -eq $TenantId) {
-    # Validate by actually setting context to first subscription (catches expired tokens / MFA)
+    # Already logged in to the correct tenant — validate the session is still usable
+    # Use Set-AzContext instead of Get-AzSubscription to catch expired MFA/conditional access tokens
     $tokenValid = $false
+    $availableSubs = @()
     try {
         Set-AzContext -SubscriptionId $SubscriptionIds[0] -TenantId $TenantId -ErrorAction Stop | Out-Null
         $tokenValid = $true
+        # Fetch subscription list for verification display
+        try { $availableSubs = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop) } catch {}
     }
     catch {
         Write-Host "  ⚠ Session expired or MFA required — re-authenticating..." -ForegroundColor Yellow
     }
     if ($tokenValid) {
         Write-Host "  ✓ Using existing Az session: $($existingContext.Account.Id)" -ForegroundColor Green
+        Write-Host "    Tenant: $($existingContext.Tenant.Id)" -ForegroundColor Gray
+
+        # Verify each requested subscription is accessible and show friendly names
+        if ($availableSubs.Count -gt 0) {
+            $availableSubIds = @($availableSubs | ForEach-Object { $_.Id })
+            foreach ($subId in $SubscriptionIds) {
+                if ($subId -notin $availableSubIds) {
+                    Write-Host "  ⚠ Subscription $subId is not accessible with this account" -ForegroundColor Yellow
+                    $closestMatch = $availableSubs | Where-Object { $_.Name -match 'vdi|avd|desktop' -or $_.Id -like "$($subId.Substring(0,8))*" } | Select-Object -First 1
+                    if ($closestMatch) {
+                        Write-Host "    Did you mean: $($closestMatch.Name) ($($closestMatch.Id))?" -ForegroundColor Yellow
+                    }
+                    Write-Host "    Available subscriptions in this tenant:" -ForegroundColor Gray
+                    foreach ($s in ($availableSubs | Select-Object -First 10)) {
+                        Write-Host "      - $($s.Name) ($($s.Id))" -ForegroundColor Gray
+                    }
+                    if ($availableSubs.Count -gt 10) { Write-Host "      ... and $($availableSubs.Count - 10) more" -ForegroundColor Gray }
+                } else {
+                    $subMatch = $availableSubs | Where-Object { $_.Id -eq $subId } | Select-Object -First 1
+                    $subName = if ($subMatch) { $subMatch.Name } else { $subId }
+                    Write-Host "    ✓ Subscription verified: $subName ($subId)" -ForegroundColor Green
+                }
+            }
+        }
     }
     else {
         Disable-AzContextAutosave -Scope Process | Out-Null
         Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
         Connect-AzAccount -TenantId $TenantId | Out-Null
-        # Set context to first subscription after fresh login
         Set-AzContext -SubscriptionId $SubscriptionIds[0] -TenantId $TenantId -ErrorAction Stop | Out-Null
     }
 }
 else {
     if ($existingContext -and $existingContext.Tenant.Id -ne $TenantId) {
-        Write-Host "  ⚠ Switching from tenant $($existingContext.Tenant.Id) to $TenantId" -ForegroundColor Yellow
+        Write-Host "  ⚠ Current session is for tenant $($existingContext.Tenant.Id) — switching to $TenantId" -ForegroundColor Yellow
     }
     Disable-AzContextAutosave -Scope Process | Out-Null
     Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
@@ -597,7 +625,15 @@ foreach ($subId in $SubscriptionIds) {
             $script:currentSubContext = $subId
         }
         catch {
-            Write-Step -Step "Subscription" -Message "Cannot access $subId — $($_.Exception.Message)" -Status "Error"
+            $errMsg = $_.Exception.Message
+            Write-Step -Step "Subscription" -Message "Cannot access $subId" -Status "Error"
+            if ($errMsg -match 'interaction is required|multi-factor|MFA|conditional access') {
+                Write-Host "    Token expired or MFA required. Run: Connect-AzAccount -TenantId '$TenantId'" -ForegroundColor Yellow
+            } elseif ($errMsg -match 'not found|does not exist|invalid') {
+                Write-Host "    Subscription not found in tenant. Verify the subscription ID is correct." -ForegroundColor Yellow
+            } else {
+                Write-Host "    $errMsg" -ForegroundColor Gray
+            }
             $subsSkipped += $subId
             continue
         }
@@ -1361,6 +1397,10 @@ else {
             $tdStatus = ($tdResult | Where-Object { $_.PSObject.Properties.Name -contains 'Status' } | Select-Object -First 1)
             if ($tdStatus -and $tdStatus.Status -in @("WorkspaceNotFound", "QueryFailed", "InvalidWorkspaceId")) {
                 Write-Step -Step "KQL" -Message "Workspace unreachable ($($tdStatus.Status)) — skipping remaining queries" -Status "Error"
+                if ($tdStatus.Status -eq "WorkspaceNotFound") {
+                    Write-Host "    Verify the workspace resource ID is correct and that you have Log Analytics Reader access." -ForegroundColor Yellow
+                    Write-Host "    Expected format: /subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<name>" -ForegroundColor Gray
+                }
                 continue
             }
         }
