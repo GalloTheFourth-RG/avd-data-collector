@@ -266,13 +266,14 @@ if ($isManagedIdentity) {
     Write-Host "  ✓ Using existing Managed Identity connection" -ForegroundColor Green
 }
 elseif ($existingContext -and $existingContext.Account -and $existingContext.Tenant.Id -eq $TenantId) {
+    # Validate by actually setting context to first subscription (catches expired tokens / MFA)
     $tokenValid = $false
     try {
-        $null = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop)
+        Set-AzContext -SubscriptionId $SubscriptionIds[0] -TenantId $TenantId -ErrorAction Stop | Out-Null
         $tokenValid = $true
     }
     catch {
-        Write-Host "  ⚠ Existing session expired — re-authenticating..." -ForegroundColor Yellow
+        Write-Host "  ⚠ Session expired or MFA required — re-authenticating..." -ForegroundColor Yellow
     }
     if ($tokenValid) {
         Write-Host "  ✓ Using existing Az session: $($existingContext.Account.Id)" -ForegroundColor Green
@@ -281,6 +282,8 @@ elseif ($existingContext -and $existingContext.Account -and $existingContext.Ten
         Disable-AzContextAutosave -Scope Process | Out-Null
         Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
         Connect-AzAccount -TenantId $TenantId | Out-Null
+        # Set context to first subscription after fresh login
+        Set-AzContext -SubscriptionId $SubscriptionIds[0] -TenantId $TenantId -ErrorAction Stop | Out-Null
     }
 }
 else {
@@ -290,7 +293,11 @@ else {
     Disable-AzContextAutosave -Scope Process | Out-Null
     Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
     Connect-AzAccount -TenantId $TenantId | Out-Null
+    Set-AzContext -SubscriptionId $SubscriptionIds[0] -TenantId $TenantId -ErrorAction Stop | Out-Null
 }
+
+# Track which subscription context is already set to avoid redundant Set-AzContext calls
+$script:currentSubContext = $SubscriptionIds[0]
 
 Write-Host ""
 
@@ -583,13 +590,17 @@ foreach ($subId in $SubscriptionIds) {
     $subsProcessed++
     Write-Step -Step "Subscription $subsProcessed/$(SafeCount $SubscriptionIds)" -Message $subId
 
-    try {
-        Set-AzContext -SubscriptionId $subId -TenantId $TenantId -ErrorAction Stop | Out-Null
-    }
-    catch {
-        Write-Step -Step "Subscription" -Message "Cannot access $subId — $($_.Exception.Message)" -Status "Error"
-        $subsSkipped += $subId
-        continue
+    # Skip Set-AzContext if we already validated context for this subscription during auth
+    if ($script:currentSubContext -ne $subId) {
+        try {
+            Set-AzContext -SubscriptionId $subId -TenantId $TenantId -ErrorAction Stop | Out-Null
+            $script:currentSubContext = $subId
+        }
+        catch {
+            Write-Step -Step "Subscription" -Message "Cannot access $subId — $($_.Exception.Message)" -Status "Error"
+            $subsSkipped += $subId
+            continue
+        }
     }
 
     # ── Host Pools ──
@@ -1327,9 +1338,10 @@ else {
     foreach ($wsId in $LogAnalyticsWorkspaceResourceIds) {
         # Handle cross-subscription workspace access
         $wsSubId = Get-SubFromArmId $wsId
-        if ($wsSubId -and $wsSubId -notin $SubscriptionIds) {
+        if ($wsSubId -and $wsSubId -ne $script:currentSubContext) {
             try {
                 Set-AzContext -SubscriptionId $wsSubId -TenantId $TenantId -ErrorAction Stop | Out-Null
+                $script:currentSubContext = $wsSubId
             }
             catch {
                 Write-Step -Step "KQL" -Message "Cannot access workspace subscription $wsSubId — $($_.Exception.Message)" -Status "Error"
@@ -1419,7 +1431,10 @@ if ($IncludeQuotaUsage) {
         Write-Step -Step "Quota" -Message "Region: $region" -Status "Progress"
         try {
             # Switch to first subscription for quota query
-            Set-AzContext -SubscriptionId $SubscriptionIds[0] -TenantId $TenantId -ErrorAction Stop | Out-Null
+            if ($script:currentSubContext -ne $SubscriptionIds[0]) {
+                Set-AzContext -SubscriptionId $SubscriptionIds[0] -TenantId $TenantId -ErrorAction Stop | Out-Null
+                $script:currentSubContext = $SubscriptionIds[0]
+            }
             $usageData = @(Get-AzVMUsage -Location $region -ErrorAction Stop)
 
             foreach ($usage in $usageData) {
