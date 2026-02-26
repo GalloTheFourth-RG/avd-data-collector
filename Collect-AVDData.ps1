@@ -1849,6 +1849,8 @@ $metadata | ConvertTo-Json -Depth 5 | Out-File -FilePath (Join-Path $outFolder "
 Write-Host "    ✓ collection-metadata.json" -ForegroundColor Green
 
 # ── Create ZIP ──
+# make sure diagnostic transcript is closed before archiving
+if (Get-Command Stop-Transcript -ErrorAction SilentlyContinue) { Stop-Transcript | Out-Null }
 $zipPath = "$outFolder.zip"
 try {
     Compress-Archive -Path $outFolder -DestinationPath $zipPath -Force
