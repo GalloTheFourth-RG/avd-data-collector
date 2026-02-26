@@ -42,6 +42,10 @@
     Anonymize all identifiable data (VM names, host pool names, usernames,
     subscription IDs, IPs, resource groups) before export. Same entity always
     maps to the same anonymous ID within a run.
+.PARAMETER ResumeFrom
+    Path to a partial output folder from an interrupted run. The script will
+    detect which steps already completed (by checking for checkpoint JSON files)
+    and skip them, reloading the data into memory so downstream steps work.
 .PARAMETER DryRun
     Preview collection scope without running
 .PARAMETER SkipDisclaimer
@@ -69,6 +73,7 @@ param(
     [datetime]$IncidentWindowStart = (Get-Date).AddDays(-14),
     [datetime]$IncidentWindowEnd = (Get-Date),
     [switch]$ScrubPII,
+    [string]$ResumeFrom,
     [switch]$DryRun,
     [switch]$SkipDisclaimer,
     [int]$MetricsParallel = 15,
@@ -401,23 +406,72 @@ $script:diskEncCache = @{}
 # Timing
 $script:collectionStart = Get-Date
 
-# Output folder (create early so exports work)
-try {
-    $timeStamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
-    $outFolderName = "AVD-CollectionPack-$timeStamp"
-    $baseOut = if ($OutputPath) { (Resolve-Path -Path $OutputPath).Path } else { (Get-Location).Path }
-    $outFolder = Join-Path $baseOut $outFolderName
-    if (-not (Test-Path $outFolder)) { New-Item -Path $outFolder -ItemType Directory -Force | Out-Null }
-    # start diagnostic transcript
-    $diagPath = Join-Path $outFolder 'diagnostic.log'
-    if (Get-Module -ListAvailable -Name Microsoft.PowerShell.Utility) {
-        Start-Transcript -Path $diagPath -Force | Out-Null
+# =========================================================
+# Checkpoint / Resume helpers
+# =========================================================
+function Save-Checkpoint {
+    param([string]$StepName)
+    $cpFile = Join-Path $outFolder "_checkpoint_${StepName}.json"
+    @{ Step = $StepName; Timestamp = (Get-Date -Format 'o') } | ConvertTo-Json | Out-File -FilePath $cpFile -Encoding UTF8
+}
+
+function Test-Checkpoint {
+    param([string]$StepName)
+    $cpFile = Join-Path $outFolder "_checkpoint_${StepName}.json"
+    return (Test-Path $cpFile)
+}
+
+function Import-StepData {
+    param([string]$FileName, [System.Collections.Generic.List[object]]$Target)
+    $fp = Join-Path $outFolder $FileName
+    if (Test-Path $fp) {
+        $data = Get-Content $fp -Raw | ConvertFrom-Json
+        foreach ($item in @($data)) { $Target.Add($item) }
+        Write-Host "    Loaded $(SafeCount $Target) items from $FileName" -ForegroundColor Gray
     }
 }
-catch {
-    $outFolder = Join-Path (Get-Location).Path "AVD-CollectionPack-$((Get-Date).ToString('yyyyMMdd-HHmmss'))"
-    if (-not (Test-Path $outFolder)) { New-Item -Path $outFolder -ItemType Directory -Force | Out-Null }
+
+function Export-PackJson {
+    param([string]$FileName, [object]$Data)
+    $filePath = Join-Path $outFolder $FileName
+    $Data | ConvertTo-Json -Depth 10 -Compress | Out-File -FilePath $filePath -Encoding UTF8
+    $count = if ($Data -is [System.Collections.ICollection]) { $Data.Count } else { @($Data).Count }
+    Write-Host "    ✓ $FileName — $count items" -ForegroundColor Green
 }
+
+# Resuming from a previous partial run?
+$script:isResume = $false
+if ($ResumeFrom) {
+    if (-not (Test-Path $ResumeFrom)) {
+        Write-Host "ERROR: Resume folder not found: $ResumeFrom" -ForegroundColor Red
+        exit 1
+    }
+    $outFolder = (Resolve-Path $ResumeFrom).Path
+    $script:isResume = $true
+    Write-Host "" 
+    Write-Host "  RESUMING from: $outFolder" -ForegroundColor Yellow
+    Write-Host ""
+}
+else {
+    # Output folder (create early so exports work)
+    try {
+        $timeStamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+        $outFolderName = "AVD-CollectionPack-$timeStamp"
+        $baseOut = if ($OutputPath) { (Resolve-Path -Path $OutputPath).Path } else { (Get-Location).Path }
+        $outFolder = Join-Path $baseOut $outFolderName
+        if (-not (Test-Path $outFolder)) { New-Item -Path $outFolder -ItemType Directory -Force | Out-Null }
+    }
+    catch {
+        $outFolder = Join-Path (Get-Location).Path "AVD-CollectionPack-$((Get-Date).ToString('yyyyMMdd-HHmmss'))"
+        if (-not (Test-Path $outFolder)) { New-Item -Path $outFolder -ItemType Directory -Force | Out-Null }
+    }
+}
+
+# Start diagnostic transcript
+try {
+    $diagPath = Join-Path $outFolder 'diagnostic.log'
+    Start-Transcript -Path $diagPath -Append -Force | Out-Null
+} catch { }
 
 # =========================================================
 # KQL Query Loading
@@ -610,13 +664,50 @@ if ($ScrubPII) {
     Write-Host "  [PII SCRUBBING ENABLED] identifiers will be anonymized" -ForegroundColor Magenta
     Write-Host ""
 }
+
+$subsProcessed = 0
+$subsSkipped = @()
+
+if ($script:isResume -and (Test-Checkpoint 'step1-arm')) {
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "  Step 1: ARM Resources — RESUMED (loading from checkpoint)" -ForegroundColor Yellow
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host ""
+    Import-StepData -FileName 'host-pools.json' -Target $hostPools
+    Import-StepData -FileName 'session-hosts.json' -Target $sessionHosts
+    Import-StepData -FileName 'virtual-machines.json' -Target $vms
+    Import-StepData -FileName 'vmss.json' -Target $vmss
+    Import-StepData -FileName 'vmss-instances.json' -Target $vmssInstances
+    Import-StepData -FileName 'app-groups.json' -Target $appGroups
+    Import-StepData -FileName 'scaling-plans.json' -Target $scalingPlans
+    Import-StepData -FileName 'scaling-plan-assignments.json' -Target $scalingPlanAssignments
+    Import-StepData -FileName 'scaling-plan-schedules.json' -Target $scalingPlanSchedules
+    Import-StepData -FileName 'capacity-reservation-groups.json' -Target $capacityReservationGroups
+    # Reload raw VM IDs from checkpoint (these are the real ARM IDs, not scrubbed)
+    $rawIdFile = Join-Path $outFolder '_raw-vm-ids.json'
+    if (Test-Path $rawIdFile) {
+        $rawIdData = Get-Content $rawIdFile -Raw | ConvertFrom-Json
+        foreach ($id in @($rawIdData.RawVmIds)) { if ($id) { $rawVmIds.Add($id) } }
+        foreach ($n in @($rawIdData.RawVmNames)) { if ($n) { try { $rawVmNames.Add($n) } catch { } } }
+        Write-Host "    Loaded $(SafeCount $rawVmIds) raw VM IDs for metrics" -ForegroundColor Gray
+    }
+    else {
+        # Fallback: try from VM data (will be scrubbed if PII was on)
+        foreach ($v in $vms) {
+            $vid = SafeProp $v 'VMId'
+            if ($vid) { $rawVmIds.Add($vid) }
+            $vn = SafeProp $v 'VMName'
+            if ($vn) { try { $rawVmNames.Add($vn) } catch { } }
+        }
+    }
+    Write-Host "  ARM data reloaded: $(SafeCount $hostPools) host pools, $(SafeCount $vms) VMs" -ForegroundColor Green
+    Write-Host ""
+}
+else {
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 Write-Host "  Step 1 of $(if ($SkipAzureMonitorMetrics) { '3' } else { '4' }): Collecting ARM Resources" -ForegroundColor Cyan
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 Write-Host ""
-
-$subsProcessed = 0
-$subsSkipped = @()
 
 foreach ($subId in $SubscriptionIds) {
     try {
@@ -1132,10 +1223,39 @@ Write-Host ""
 Write-Host "  ARM collection complete: $(SafeCount $hostPools) host pools, $(SafeCount $vms) VMs, $(SafeCount $sessionHosts) session hosts" -ForegroundColor Green
 Write-Host ""
 
+# Save Step 1 checkpoint + incremental data
+Export-PackJson -FileName 'host-pools.json' -Data $hostPools
+Export-PackJson -FileName 'session-hosts.json' -Data $sessionHosts
+Export-PackJson -FileName 'virtual-machines.json' -Data $vms
+Export-PackJson -FileName 'vmss.json' -Data $vmss
+Export-PackJson -FileName 'vmss-instances.json' -Data $vmssInstances
+Export-PackJson -FileName 'app-groups.json' -Data $appGroups
+Export-PackJson -FileName 'scaling-plans.json' -Data $scalingPlans
+Export-PackJson -FileName 'scaling-plan-assignments.json' -Data $scalingPlanAssignments
+Export-PackJson -FileName 'scaling-plan-schedules.json' -Data $scalingPlanSchedules
+Export-PackJson -FileName 'capacity-reservation-groups.json' -Data $capacityReservationGroups
+# Save raw VM identifiers for metrics resume (not included in final pack)
+@{ RawVmIds = @($rawVmIds); RawVmNames = @($rawVmNames) } | ConvertTo-Json -Depth 3 -Compress | Out-File -FilePath (Join-Path $outFolder '_raw-vm-ids.json') -Encoding UTF8
+Save-Checkpoint 'step1-arm'
+Write-Host "  [CHECKPOINT] Step 1 saved — safe to resume from: $outFolder" -ForegroundColor DarkGray
+Write-Host ""
+
+} # end if/else resume step 1
+
 # =========================================================
 # STEP 2: Collect Azure Monitor Metrics
 # =========================================================
-if ($SkipAzureMonitorMetrics) {
+if ($script:isResume -and (Test-Checkpoint 'step2-metrics')) {
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "  Step 2: Azure Monitor Metrics — RESUMED (loading from checkpoint)" -ForegroundColor Yellow
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host ""
+    Import-StepData -FileName 'metrics-baseline.json' -Target $vmMetrics
+    Import-StepData -FileName 'metrics-incident.json' -Target $vmMetricsIncident
+    Write-Host "  Metrics reloaded: $(SafeCount $vmMetrics) datapoints" -ForegroundColor Green
+    Write-Host ""
+}
+elseif ($SkipAzureMonitorMetrics) {
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
     Write-Host "  Step 2: Azure Monitor Metrics — SKIPPED" -ForegroundColor Yellow
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
@@ -1349,12 +1469,28 @@ else {
         Write-Host "  ✓ Incident metrics: $(SafeCount $vmMetricsIncident) datapoints" -ForegroundColor Green
         Write-Host ""
     }
+
+    # Save Step 2 checkpoint
+    Export-PackJson -FileName 'metrics-baseline.json' -Data $vmMetrics
+    Export-PackJson -FileName 'metrics-incident.json' -Data $vmMetricsIncident
+    Save-Checkpoint 'step2-metrics'
+    Write-Host "  [CHECKPOINT] Step 2 saved — safe to resume from: $outFolder" -ForegroundColor DarkGray
+    Write-Host ""
 }
 
 # =========================================================
 # STEP 3: Log Analytics (KQL) Queries
 # =========================================================
-if ($SkipLogAnalyticsQueries -or (SafeCount $LogAnalyticsWorkspaceResourceIds) -eq 0) {
+if ($script:isResume -and (Test-Checkpoint 'step3-kql')) {
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "  Step 3: KQL Queries — RESUMED (loading from checkpoint)" -ForegroundColor Yellow
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host ""
+    Import-StepData -FileName 'la-results.json' -Target $laResults
+    Write-Host "  KQL data reloaded: $(SafeCount $laResults) results" -ForegroundColor Green
+    Write-Host ""
+}
+elseif ($SkipLogAnalyticsQueries -or (SafeCount $LogAnalyticsWorkspaceResourceIds) -eq 0) {
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
     if ($SkipLogAnalyticsQueries) {
         Write-Host "  Step 3: Log Analytics Queries — SKIPPED (-SkipLogAnalyticsQueries)" -ForegroundColor Yellow
@@ -1536,6 +1672,12 @@ else {
     Write-Host ""
     Write-Host "  ✓ KQL collection complete: $(SafeCount $laResults) total results" -ForegroundColor Green
     Write-Host ""
+
+    # Save Step 3 checkpoint
+    Export-PackJson -FileName 'la-results.json' -Data $laResults
+    Save-Checkpoint 'step3-kql'
+    Write-Host "  [CHECKPOINT] Step 3 saved — safe to resume from: $outFolder" -ForegroundColor DarkGray
+    Write-Host ""
 }
 
 # =========================================================
@@ -1594,34 +1736,13 @@ if ($IncludeQuotaUsage) {
 # =========================================================
 # EXPORT: Write Collection Pack
 # =========================================================
-Write-Host ""
+Write-Host "" 
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 Write-Host "  Exporting Collection Pack" -ForegroundColor Cyan
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 Write-Host ""
 
-function Export-PackJson {
-    param([string]$FileName, [object]$Data)
-    $filePath = Join-Path $outFolder $FileName
-    $Data | ConvertTo-Json -Depth 10 -Compress | Out-File -FilePath $filePath -Encoding UTF8
-    $count = if ($Data -is [System.Collections.ICollection]) { $Data.Count } else { @($Data).Count }
-    Write-Host "    ✓ $FileName — $count items" -ForegroundColor Green
-}
-
-# Core data files
-Export-PackJson -FileName "host-pools.json" -Data $hostPools
-Export-PackJson -FileName "session-hosts.json" -Data $sessionHosts
-Export-PackJson -FileName "virtual-machines.json" -Data $vms
-Export-PackJson -FileName "vmss.json" -Data $vmss
-Export-PackJson -FileName "vmss-instances.json" -Data $vmssInstances
-Export-PackJson -FileName "app-groups.json" -Data $appGroups
-Export-PackJson -FileName "scaling-plans.json" -Data $scalingPlans
-Export-PackJson -FileName "scaling-plan-assignments.json" -Data $scalingPlanAssignments
-Export-PackJson -FileName "scaling-plan-schedules.json" -Data $scalingPlanSchedules
-Export-PackJson -FileName "metrics-baseline.json" -Data $vmMetrics
-Export-PackJson -FileName "metrics-incident.json" -Data $vmMetricsIncident
-Export-PackJson -FileName "la-results.json" -Data $laResults
-Export-PackJson -FileName "capacity-reservation-groups.json" -Data $capacityReservationGroups
+# Final exports (quota + metadata — other files already saved at checkpoints)
 Export-PackJson -FileName "quota-usage.json" -Data $quotaUsage
 
 # Metadata
@@ -1658,6 +1779,11 @@ Write-Host "    ✓ collection-metadata.json" -ForegroundColor Green
 # ── Create ZIP ──
 # make sure diagnostic transcript is closed before archiving
 if (Get-Command Stop-Transcript -ErrorAction SilentlyContinue) { try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { } }
+
+# Remove checkpoint and internal files before archiving (they're internal bookkeeping)
+Get-ChildItem -Path $outFolder -Filter '_checkpoint_*.json' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+Get-ChildItem -Path $outFolder -Filter '_raw-vm-ids.json' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+
 $zipPath = "$outFolder.zip"
 try {
     Compress-Archive -Path $outFolder -DestinationPath $zipPath -Force
