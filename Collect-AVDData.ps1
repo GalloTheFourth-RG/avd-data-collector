@@ -846,7 +846,7 @@ foreach ($subId in $SubscriptionIds) {
         Write-Step -Step "Host Pools" -Message "Enumerating..." -Status "Progress"
     }
     catch {
-        Write-Step -Step "Subscription" -Message "Unexpected error processing $subId: $($_.Exception.Message)" -Status "Error"
+        Write-Step -Step "Subscription" -Message "Unexpected error processing ${subId}: $($_.Exception.Message)" -Status "Error"
         continue
     }
     $hpObjs = Get-AzWvdHostPool -ErrorAction SilentlyContinue
