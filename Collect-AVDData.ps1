@@ -393,6 +393,14 @@ function Protect-ArmId {
     if ([string]::IsNullOrEmpty($Value)) { return $Value }
     return (Protect-Value -Value $Value -Prefix "ArmId" -Length 8)
 }
+function Protect-StorageAccountName {
+    param([string]$Value)
+    return (Protect-Value -Value $Value -Prefix "SA" -Length 4)
+}
+function Protect-SubnetName {
+    param([string]$Value)
+    return (Protect-Value -Value $Value -Prefix "Subnet" -Length 4)
+}
 function Protect-SubnetId {
     param([string]$Value)
     if (-not $ScrubPII) { return $Value }
@@ -863,7 +871,7 @@ function Expand-ScalingPlanEvidence {
     $rg     = $PlanResource.ResourceGroupName
     $name   = $PlanResource.Name
     $loc    = $PlanResource.Location
-    $props  = $PlanResource.Properties
+    $props  = SafeProp $PlanResource 'Properties'
 
     $scalingPlans.Add([PSCustomObject]@{
         SubscriptionId  = Protect-SubscriptionId $SubId
@@ -1397,7 +1405,7 @@ foreach ($subId in $SubscriptionIds) {
                     $instId = $inst.InstanceId
                     $instPower = "Unknown"
                     try {
-                        $instView = Get-AzVmssVM -ResourceGroupName $vmssRg -VMScaleSetName $vmssName -InstanceId $instId -InstanceView -ErrorAction SilentlyContinue
+                        $instView = Invoke-WithRetry { Get-AzVmssVM -ResourceGroupName $vmssRg -VMScaleSetName $vmssName -InstanceId $instId -InstanceView -ErrorAction SilentlyContinue }
                         if ($instView -and $instView.Statuses) {
                             $pc = $instView.Statuses | Where-Object { $_.Code -like 'PowerState/*' } | Select-Object -First 1
                             if ($pc) { $instPower = ($pc.Code -split '/')[-1] }
@@ -1435,7 +1443,18 @@ foreach ($subId in $SubscriptionIds) {
             $crResp = Invoke-AzRestMethod -Uri $crApiUrl -Method GET -ErrorAction Stop
             if ($crResp.StatusCode -eq 200) {
                 $crData = $crResp.Content | ConvertFrom-Json
-                foreach ($crg in SafeArray $crData.value) {
+                $crItems = @(SafeArray $crData.value)
+                # Handle pagination
+                $crNextLink = SafeProp $crData 'nextLink'
+                while ($crNextLink) {
+                    $crNlResp = Invoke-AzRestMethod -Uri $crNextLink -Method GET -ErrorAction Stop
+                    if ($crNlResp.StatusCode -eq 200) {
+                        $crNlData = $crNlResp.Content | ConvertFrom-Json
+                        $crItems += @(SafeArray $crNlData.value)
+                        $crNextLink = SafeProp $crNlData 'nextLink'
+                    } else { $crNextLink = $null }
+                }
+                foreach ($crg in $crItems) {
                     $crgId   = $crg.id
                     $crgName = $crg.name
 
@@ -1582,7 +1601,7 @@ if ($hasExtendedCollection) {
                         aggregation = @{ totalCost = @{ name = "Cost"; function = "Sum" } }
                     }
                 } | ConvertTo-Json -Depth 10
-                $testResp = Invoke-AzRestMethod -Path "/subscriptions/$subId/providers/Microsoft.CostManagement/query?api-version=2023-11-01" -Method POST -Payload $testBody -ErrorAction Stop
+                $testResp = Invoke-WithRetry { Invoke-AzRestMethod -Path "/subscriptions/$subId/providers/Microsoft.CostManagement/query?api-version=2023-11-01" -Method POST -Payload $testBody -ErrorAction Stop }
                 
                 if ($testResp.StatusCode -ne 200) {
                     $costAccessDenied.Add($subId)
@@ -1607,11 +1626,12 @@ if ($hasExtendedCollection) {
                         }
                     } | ConvertTo-Json -Depth 10
                     $costPath = "/subscriptions/$subId/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
-                    $costResp = Invoke-AzRestMethod -Path $costPath -Method POST -Payload $costBody -ErrorAction Stop
+                    $costResp = Invoke-WithRetry { Invoke-AzRestMethod -Path $costPath -Method POST -Payload $costBody -ErrorAction Stop }
 
                     if ($costResp.StatusCode -eq 200) {
                         $costResult = $costResp.Content | ConvertFrom-Json
-                        foreach ($row in SafeArray $costResult.properties.rows) {
+                        $costProps = SafeProp $costResult 'properties'
+                        foreach ($row in SafeArray (SafeProp $costProps 'rows')) {
                             $cost    = [double]$row[0]
                             $date    = $row[1]
                             $resId   = [string]$row[2]
@@ -1640,12 +1660,13 @@ if ($hasExtendedCollection) {
                         }
 
                         # Handle pagination
-                        $nextLink = SafeProp $costResult.properties 'nextLink'
+                        $nextLink = SafeProp $costProps 'nextLink'
                         while ($nextLink) {
                             $nlResp = Invoke-AzRestMethod -Uri $nextLink -Method GET -ErrorAction Stop
                             if ($nlResp.StatusCode -eq 200) {
                                 $nlResult = $nlResp.Content | ConvertFrom-Json
-                                foreach ($row in SafeArray $nlResult.properties.rows) {
+                                $nlProps = SafeProp $nlResult 'properties'
+                                foreach ($row in SafeArray (SafeProp $nlProps 'rows')) {
                                     $cost    = [double]$row[0]
                                     $date    = $row[1]
                                     $resId   = [string]$row[2]
@@ -1669,7 +1690,7 @@ if ($hasExtendedCollection) {
                                         $vmActualMonthlyCost[$resName] += $cost
                                     }
                                 }
-                                $nextLink = SafeProp $nlResult.properties 'nextLink'
+                                $nextLink = SafeProp $nlProps 'nextLink'
                             } else { $nextLink = $null }
                         }
                     }
@@ -1693,10 +1714,11 @@ if ($hasExtendedCollection) {
                                     )
                                 }
                             } | ConvertTo-Json -Depth 10
-                            $infraResp = Invoke-AzRestMethod -Path $costPath -Method POST -Payload $infraBody -ErrorAction Stop
+                            $infraResp = Invoke-WithRetry { Invoke-AzRestMethod -Path $costPath -Method POST -Payload $infraBody -ErrorAction Stop }
                             if ($infraResp.StatusCode -eq 200) {
                                 $infraResult = $infraResp.Content | ConvertFrom-Json
-                                foreach ($row in SafeArray $infraResult.properties.rows) {
+                                $infraProps = SafeProp $infraResult 'properties'
+                                foreach ($row in SafeArray (SafeProp $infraProps 'rows')) {
                                     $infraCostData.Add([PSCustomObject]@{
                                         SubscriptionId = Protect-SubscriptionId $subId
                                         ResourceGroup  = Protect-ResourceGroup $rgName
@@ -1706,9 +1728,29 @@ if ($hasExtendedCollection) {
                                         Currency       = "USD"
                                     })
                                 }
+                                # Paginate infra cost
+                                $infraNextLink = SafeProp $infraProps 'nextLink'
+                                while ($infraNextLink) {
+                                    $infraNlResp = Invoke-AzRestMethod -Uri $infraNextLink -Method GET -ErrorAction Stop
+                                    if ($infraNlResp.StatusCode -eq 200) {
+                                        $infraNlResult = $infraNlResp.Content | ConvertFrom-Json
+                                        $infraNlProps = SafeProp $infraNlResult 'properties'
+                                        foreach ($row in SafeArray (SafeProp $infraNlProps 'rows')) {
+                                            $infraCostData.Add([PSCustomObject]@{
+                                                SubscriptionId = Protect-SubscriptionId $subId
+                                                ResourceGroup  = Protect-ResourceGroup $rgName
+                                                ResourceType   = [string]$row[1]
+                                                MeterCategory  = [string]$row[2]
+                                                TotalCost      = [double]$row[0]
+                                                Currency       = "USD"
+                                            })
+                                        }
+                                        $infraNextLink = SafeProp $infraNlProps 'nextLink'
+                                    } else { $infraNextLink = $null }
+                                }
                             }
                         }
-                        catch { }
+                        catch { Write-Verbose "    ⚠ Infra cost query failed for RG: $($_.Exception.Message)" }
                     }
 
                     Write-Host "    ✓ Cost data: $(SafeCount $actualCostData) entries, $(($vmActualMonthlyCost.Keys).Count) VMs with costs" -ForegroundColor Green
@@ -1744,7 +1786,7 @@ if ($hasExtendedCollection) {
                     $vnetKey    = "$vnetRg/$vnetName".ToLower()
 
                     if (-not $vnetCache.ContainsKey($vnetKey)) {
-                        $vnet = Get-AzVirtualNetwork -ResourceGroupName $vnetRg -Name $vnetName -ErrorAction SilentlyContinue
+                        $vnet = Invoke-WithRetry { Get-AzVirtualNetwork -ResourceGroupName $vnetRg -Name $vnetName -ErrorAction SilentlyContinue }
                         $vnetCache[$vnetKey] = $vnet
                     }
                     $vnet = $vnetCache[$vnetKey]
@@ -1757,7 +1799,7 @@ if ($hasExtendedCollection) {
                     if ($addrPrefix -match '/(\d+)$') { $cidr = [int]$matches[1] }
                     $totalIps = if ($cidr -gt 0) { [math]::Pow(2, 32 - $cidr) } else { 0 }
                     $usableIps = [math]::Max(0, $totalIps - 5)  # Azure reserves 5
-                    $usedIps = ($subnet.IpConfigurations.Count) + 0
+                    $usedIps = (SafeCount (SafeProp $subnet 'IpConfigurations')) + 0
                     $availIps = [math]::Max(0, $usableIps - $usedIps)
                     $usagePct = if ($usableIps -gt 0) { [math]::Round(($usedIps / $usableIps) * 100, 1) } else { 0 }
 
@@ -1789,27 +1831,33 @@ if ($hasExtendedCollection) {
                         SessionHostCount = $uniqueSubnets[$subnetId].VmCount
                     })
                 }
-                catch { }
+                catch { Write-Verbose "    ⚠ Subnet analysis error: $($_.Exception.Message)" }
             }
 
             # VNet DNS and peering analysis
             foreach ($vnetKey in $vnetCache.Keys) {
                 $vnet = $vnetCache[$vnetKey]
                 if (-not $vnet) { continue }
-                $dnsServers = @($vnet.DhcpOptions.DnsServers)
-                $peerings = @($vnet.VirtualNetworkPeerings)
-                $disconnected = @($peerings | Where-Object { $_.PeeringState -ne 'Connected' })
-                $vnetAnalysis.Add([PSCustomObject]@{
-                    SubscriptionId     = Protect-SubscriptionId $subId
-                    VNetName           = Protect-Value -Value $vnet.Name -Prefix "VNet" -Length 4
-                    Location           = $vnet.Location
-                    AddressSpace       = ($vnet.AddressSpace.AddressPrefixes -join "; ")
-                    DnsServers         = if ($ScrubPII) { "[SCRUBBED]" } else { ($dnsServers -join "; ") }
-                    IsCustomDns        = ($dnsServers.Count -gt 0)
-                    PeeringCount       = $peerings.Count
-                    DisconnectedPeerings = $disconnected.Count
-                    SubnetCount        = $vnet.Subnets.Count
-                })
+                try {
+                    $dhcpOpts = SafeProp $vnet 'DhcpOptions'
+                    $dnsServers = @(if ($dhcpOpts) { SafeArray (SafeProp $dhcpOpts 'DnsServers') } else { @() })
+                    $peerings = @(SafeArray (SafeProp $vnet 'VirtualNetworkPeerings'))
+                    $disconnected = @($peerings | Where-Object { $_.PeeringState -ne 'Connected' })
+                    $addrSpace = SafeProp $vnet 'AddressSpace'
+                    $addrPrefixes = if ($addrSpace) { SafeProp $addrSpace 'AddressPrefixes' } else { @() }
+                    $vnetAnalysis.Add([PSCustomObject]@{
+                        SubscriptionId     = Protect-SubscriptionId $subId
+                        VNetName           = Protect-Value -Value $vnet.Name -Prefix "VNet" -Length 4
+                        Location           = $vnet.Location
+                        AddressSpace       = (($addrPrefixes) -join "; ")
+                        DnsServers         = if ($ScrubPII) { "[SCRUBBED]" } else { ($dnsServers -join "; ") }
+                        IsCustomDns        = ((SafeCount $dnsServers) -gt 0)
+                        PeeringCount       = SafeCount $peerings
+                        DisconnectedPeerings = SafeCount $disconnected
+                        SubnetCount        = SafeCount (SafeProp $vnet 'Subnets')
+                    })
+                }
+                catch { Write-Verbose "    ⚠ VNet analysis error for ${vnetKey}: $($_.Exception.Message)" }
             }
 
             # Private endpoint check per host pool
@@ -1817,7 +1865,7 @@ if ($hasExtendedCollection) {
                 $rawHpId = if (-not $ScrubPII) { SafeProp $hp 'Id' } else { $null }
                 if (-not $rawHpId) { continue }
                 try {
-                    $peConns = @(Get-AzPrivateEndpointConnection -PrivateLinkResourceId $rawHpId -ErrorAction SilentlyContinue)
+                    $peConns = @(Invoke-WithRetry { Get-AzPrivateEndpointConnection -PrivateLinkResourceId $rawHpId -ErrorAction SilentlyContinue })
                     $privateEndpointFindings.Add([PSCustomObject]@{
                         HostPoolName     = $hp.HostPoolName
                         HasPrivateEndpoint = ($peConns.Count -gt 0)
@@ -1825,7 +1873,7 @@ if ($hasExtendedCollection) {
                         Status           = if ($peConns.Count -gt 0) { ($peConns[0].PrivateLinkServiceConnectionState.Status ?? "Unknown") } else { "None" }
                     })
                 }
-                catch { }
+                catch { Write-Verbose "    ⚠ Private endpoint check failed: $($_.Exception.Message)" }
             }
 
             # NSG rule evaluation
@@ -1836,9 +1884,10 @@ if ($hasExtendedCollection) {
                 if ($nsgCache.ContainsKey($rawNsgId)) { continue }
                 try {
                     $nsgParts = $rawNsgId -split '/'
+                    if ($nsgParts.Count -lt 9) { continue }
                     $nsgRg   = $nsgParts[4]
                     $nsgName = $nsgParts[8]
-                    $nsg = Get-AzNetworkSecurityGroup -ResourceGroupName $nsgRg -Name $nsgName -ErrorAction SilentlyContinue
+                    $nsg = Invoke-WithRetry { Get-AzNetworkSecurityGroup -ResourceGroupName $nsgRg -Name $nsgName -ErrorAction SilentlyContinue }
                     $nsgCache[$rawNsgId] = $nsg
                     if ($nsg) {
                         foreach ($rule in $nsg.SecurityRules) {
@@ -1862,7 +1911,7 @@ if ($hasExtendedCollection) {
                         }
                     }
                 }
-                catch { }
+                catch { Write-Verbose "    ⚠ NSG evaluation error: $($_.Exception.Message)" }
             }
 
             Write-Host "    ✓ Network: $(SafeCount $subnetAnalysis) subnets, $(SafeCount $vnetAnalysis) VNets, $(SafeCount $privateEndpointFindings) PE checks, $(SafeCount $nsgRuleFindings) risky NSG rules" -ForegroundColor Green
@@ -1947,9 +1996,11 @@ if ($hasExtendedCollection) {
                                     $shareUsage = Get-AzRmStorageShare -StorageAccount $sa -Name $shareName -GetShareUsage -ErrorAction SilentlyContinue
                                     $usedBytes = if ($shareUsage.ShareUsageBytes) { $shareUsage.ShareUsageBytes } else { 0 }
                                 }
-                                catch { }
+                                catch { Write-Verbose "    ⚠ Share usage query failed: $($_.Exception.Message)" }
 
-                                $quotaGB = $share.ShareProperties.QuotaInGiB
+                                $shareProps = SafeProp $share 'ShareProperties'
+                    $quotaGB = if ($shareProps) { SafeProp $shareProps 'QuotaInGiB' } else { 0 }
+                    if ($null -eq $quotaGB) { $quotaGB = 0 }
                                 $usedGB = [math]::Round($usedBytes / 1GB, 2)
                                 $usagePct = if ($quotaGB -gt 0) { [math]::Round(($usedGB / $quotaGB) * 100, 1) } else { 0 }
 
@@ -1959,7 +2010,7 @@ if ($hasExtendedCollection) {
                                     $peConns = @(Get-AzPrivateEndpointConnection -PrivateLinkResourceId $sa.Id -ErrorAction SilentlyContinue)
                                     $hasPE = ($peConns.Count -gt 0)
                                 }
-                                catch { }
+                                catch { Write-Verbose "    ⚠ Storage PE check failed: $($_.Exception.Message)" }
 
                                 $isFslogix = $shareName -match 'fslogix|profile|odfc|msix'
 
@@ -1984,7 +2035,7 @@ if ($hasExtendedCollection) {
                                 if ($isFslogix) { $fslogixShares.Add($entry) }
                             }
                         }
-                        catch { }
+                        catch { Write-Verbose "    ⚠ Storage account error: $($_.Exception.Message)" }
                     }
                 }
                 catch {
@@ -2010,7 +2061,9 @@ if ($hasExtendedCollection) {
                         $diagResult = ($diagResp.Content | ConvertFrom-Json).value
                         $diagCount = @($diagResult).Count
                         $workspaceTargets = @($diagResult | ForEach-Object {
-                            if ($_.properties.workspaceId) { Protect-ArmId $_.properties.workspaceId }
+                            $dProps = SafeProp $_ 'properties'
+                            $wsId = if ($dProps) { SafeProp $dProps 'workspaceId' } else { $null }
+                            if ($wsId) { Protect-ArmId $wsId }
                         } | Where-Object { $_ })
                     }
                     $diagnosticSettings.Add([PSCustomObject]@{
@@ -2022,7 +2075,7 @@ if ($hasExtendedCollection) {
                         WorkspaceTargets = ($workspaceTargets -join "; ")
                     })
                 }
-                catch { }
+                catch { Write-Verbose "    ⚠ Diagnostic settings check failed: $($_.Exception.Message)" }
             }
             Write-Host "    ✓ Diagnostic settings: $(SafeCount $diagnosticSettings) resources checked" -ForegroundColor Green
         }
@@ -2037,14 +2090,16 @@ if ($hasExtendedCollection) {
                     if ($alertResp.StatusCode -eq 200) {
                         $alertResult = ($alertResp.Content | ConvertFrom-Json).value
                         foreach ($alert in SafeArray $alertResult) {
+                            $alertProps = SafeProp $alert 'properties'
+                            $alertScopes = SafeProp $alertProps 'scopes'
                             $alertRules.Add([PSCustomObject]@{
                                 SubscriptionId = Protect-SubscriptionId $subId
                                 ResourceGroup  = Protect-ResourceGroup $rgName
                                 AlertName      = $alert.name
-                                Severity       = SafeProp $alert.properties 'severity'
-                                Enabled        = SafeProp $alert.properties 'enabled'
-                                Description    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $alert.properties 'description' }
-                                TargetType     = ($alert.properties.scopes | ForEach-Object { ($_ -split '/')[-2] } | Select-Object -First 1)
+                                Severity       = SafeProp $alertProps 'severity'
+                                Enabled        = SafeProp $alertProps 'enabled'
+                                Description    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $alertProps 'description' }
+                                TargetType     = if ($alertScopes) { ($alertScopes | ForEach-Object { ($_ -split '/')[-2] } | Select-Object -First 1) } else { 'Unknown' }
                             })
                         }
                     }
@@ -2054,19 +2109,20 @@ if ($hasExtendedCollection) {
                     if ($sqrResp.StatusCode -eq 200) {
                         $sqrResult = ($sqrResp.Content | ConvertFrom-Json).value
                         foreach ($sqr in SafeArray $sqrResult) {
+                            $sqrProps = SafeProp $sqr 'properties'
                             $alertRules.Add([PSCustomObject]@{
                                 SubscriptionId = Protect-SubscriptionId $subId
                                 ResourceGroup  = Protect-ResourceGroup $rgName
                                 AlertName      = $sqr.name
-                                Severity       = SafeProp $sqr.properties 'severity'
-                                Enabled        = SafeProp $sqr.properties 'enabled'
-                                Description    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $sqr.properties 'description' }
+                                Severity       = SafeProp $sqrProps 'severity'
+                                Enabled        = SafeProp $sqrProps 'enabled'
+                                Description    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $sqrProps 'description' }
                                 TargetType     = "ScheduledQueryRule"
                             })
                         }
                     }
                 }
-                catch { }
+                catch { Write-Verbose "    ⚠ Alert rules query failed: $($_.Exception.Message)" }
             }
             Write-Host "    ✓ Alert rules: $(SafeCount $alertRules) found" -ForegroundColor Green
         }
@@ -2085,11 +2141,11 @@ if ($hasExtendedCollection) {
                             Timestamp       = $log.EventTimestamp
                             Category        = SafeProp $log 'Category'
                             OperationName   = SafeProp $log 'OperationName'
-                            Status          = SafeProp $log.Status 'Value'
+                            Status          = SafeProp (SafeProp $log 'Status') 'Value'
                             Level           = SafeProp $log 'Level'
                             Caller          = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $log 'Caller' }
                             ResourceId      = Protect-ArmId (SafeProp $log 'ResourceId')
-                            Description     = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $log.Properties 'statusMessage' }
+                            Description     = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp (SafeProp $log 'Properties') 'statusMessage' }
                         })
                     }
                 }
@@ -2110,19 +2166,20 @@ if ($hasExtendedCollection) {
                     if ($policyResp.StatusCode -eq 200) {
                         $policyResult = ($policyResp.Content | ConvertFrom-Json).value
                         foreach ($pa in SafeArray $policyResult) {
+                            $paProps = SafeProp $pa 'properties'
                             $policyAssignments.Add([PSCustomObject]@{
                                 SubscriptionId    = Protect-SubscriptionId $subId
                                 ResourceGroup     = Protect-ResourceGroup $rgName
                                 AssignmentName    = $pa.name
-                                DisplayName       = SafeProp $pa.properties 'displayName'
-                                PolicyDefId       = SafeProp $pa.properties 'policyDefinitionId'
-                                EnforcementMode   = SafeProp $pa.properties 'enforcementMode'
-                                Scope             = Protect-ArmId (SafeProp $pa.properties 'scope')
+                                DisplayName       = SafeProp $paProps 'displayName'
+                                PolicyDefId       = SafeProp $paProps 'policyDefinitionId'
+                                EnforcementMode   = SafeProp $paProps 'enforcementMode'
+                                Scope             = Protect-ArmId (SafeProp $paProps 'scope')
                             })
                         }
                     }
                 }
-                catch { }
+                catch { Write-Verbose "    ⚠ Policy query failed: $($_.Exception.Message)" }
             }
             Write-Host "    ✓ Policy assignments: $(SafeCount $policyAssignments) found" -ForegroundColor Green
         }
@@ -2147,9 +2204,10 @@ if ($hasExtendedCollection) {
         foreach ($key in $marketplaceSkus.Keys) {
             $info = $marketplaceSkus[$key]
             try {
-                $queryLocation = ($vms | Where-Object { $_.ImagePublisher -eq $info.Publisher -and $_.ImageOffer -eq $info.Offer } | Select-Object -First 1).Region
+                $firstMatchVm = $vms | Where-Object { $_.ImagePublisher -eq $info.Publisher -and $_.ImageOffer -eq $info.Offer } | Select-Object -First 1
+                $queryLocation = if ($firstMatchVm) { SafeProp $firstMatchVm 'Region' } else { $null }
                 if (-not $queryLocation) { $queryLocation = "eastus" }
-                $latestImages = @(Get-AzVMImage -Location $queryLocation -PublisherName $info.Publisher -Offer $info.Offer -Skus $info.Sku -ErrorAction SilentlyContinue | Sort-Object -Property Version -Descending | Select-Object -First 5)
+                $latestImages = @(Invoke-WithRetry { Get-AzVMImage -Location $queryLocation -PublisherName $info.Publisher -Offer $info.Offer -Skus $info.Sku -ErrorAction SilentlyContinue } | Sort-Object -Property Version -Descending | Select-Object -First 5)
                 $latestVersion = if ($latestImages.Count -gt 0) { $latestImages[0].Version } else { "Unknown" }
                 $marketplaceImageDetails.Add([PSCustomObject]@{
                     Publisher      = $info.Publisher
@@ -2160,13 +2218,13 @@ if ($hasExtendedCollection) {
                     VMCount        = $info.Count
                 })
             }
-            catch { }
+            catch { Write-Verbose "    ⚠ Marketplace image query failed: $($_.Exception.Message)" }
         }
 
         # Gallery image analysis
         $galleryImages = @{}
         foreach ($v in $vms) {
-            if ($v.ImageSource -eq 'Gallery' -and $v.ImageId) {
+            if ($v.ImageSource -eq 'ComputeGallery' -and $v.ImageId) {
                 $rawImgId = if (-not $ScrubPII) { $v.ImageId } else { $null }
                 if (-not $rawImgId) { continue }
                 # Gallery image ID format: /subscriptions/.../galleries/xxx/images/yyy/versions/zzz
@@ -2197,7 +2255,7 @@ if ($hasExtendedCollection) {
                         ProvState   = SafeProp $ver 'ProvisioningState'
                         CreatedDate = SafeProp $ver 'PublishedDate'
                         EndOfLife   = SafeProp $ver 'EndOfLifeDate'
-                        ReplicaCount = @(SafeProp $ver.PublishingProfile 'TargetRegions').Count
+                        ReplicaCount = SafeCount (SafeProp (SafeProp $ver 'PublishingProfile') 'TargetRegions')
                     })
                 }
                 $galleryAnalysis.Add([PSCustomObject]@{
@@ -2208,7 +2266,7 @@ if ($hasExtendedCollection) {
                     VMCount        = $info.Count
                 })
             }
-            catch { }
+            catch { Write-Verbose "    ⚠ Gallery image query failed: $($_.Exception.Message)" }
         }
 
         Write-Host "  ✓ Images: $(SafeCount $marketplaceImageDetails) marketplace SKUs, $(SafeCount $galleryAnalysis) gallery images" -ForegroundColor Green
