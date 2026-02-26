@@ -1814,7 +1814,7 @@ if ($hasExtendedCollection) {
 
             # Private endpoint check per host pool
             foreach ($hp in $hostPools) {
-                $rawHpId = if (-not $ScrubPII) { $hp.HostPoolId } else { $null }
+                $rawHpId = if (-not $ScrubPII) { SafeProp $hp 'Id' } else { $null }
                 if (-not $rawHpId) { continue }
                 try {
                     $peConns = @(Get-AzPrivateEndpointConnection -PrivateLinkResourceId $rawHpId -ErrorAction SilentlyContinue)
@@ -1999,7 +1999,7 @@ if ($hasExtendedCollection) {
             Write-Host "    Collecting diagnostic settings..." -ForegroundColor Gray
             # Check host pools
             foreach ($hp in $hostPools) {
-                $rawHpId = if (-not $ScrubPII) { $hp.HostPoolId } else { $null }
+                $rawHpId = if (-not $ScrubPII) { SafeProp $hp 'Id' } else { $null }
                 if (-not $rawHpId) { continue }
                 try {
                     $diagUri = "${rawHpId}/providers/Microsoft.Insights/diagnosticSettings?api-version=2021-05-01-preview"
