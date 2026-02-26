@@ -454,11 +454,9 @@ if (-not $existingContext -or -not $existingContext.Account) {
 }
 
 # Validate token is still active
-$tokenValid = $false
 $availableSubs = @()
 try {
     $availableSubs = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop)
-    $tokenValid = $true
 }
 catch {
     Write-Host "  ⚠ Session token expired — re-authenticating..." -ForegroundColor Yellow
@@ -467,7 +465,6 @@ catch {
         Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
         Connect-AzAccount -TenantId $TenantId -ErrorAction Stop | Out-Null
         $availableSubs = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop)
-        $tokenValid = $true
     }
     catch {
         Write-Host "  ✗ Authentication failed: $($_.Exception.Message)" -ForegroundColor Red
