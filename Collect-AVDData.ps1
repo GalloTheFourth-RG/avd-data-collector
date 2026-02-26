@@ -792,32 +792,38 @@ $subsProcessed = 0
 $subsSkipped = @()
 
 foreach ($subId in $SubscriptionIds) {
-    $subsProcessed++
-    Write-Step -Step "Subscription $subsProcessed/$(SafeCount $SubscriptionIds)" -Message $subId
+    try {
+        $subsProcessed++
+        Write-Step -Step "Subscription $subsProcessed/$(SafeCount $SubscriptionIds)" -Message $subId
 
-    # Skip Set-AzContext if we already validated context for this subscription during auth
-    if ($script:currentSubContext -ne $subId) {
-        try {
-            Set-AzContext -SubscriptionId $subId -TenantId $TenantId -ErrorAction Stop | Out-Null
-            $script:currentSubContext = $subId
-        }
-        catch {
-            $errMsg = $_.Exception.Message
-            Write-Step -Step "Subscription" -Message "Cannot access $subId" -Status "Error"
-            if ($errMsg -match 'interaction is required|multi-factor|MFA|conditional access') {
-                Write-Host "    Token expired or MFA required. Run: Connect-AzAccount -TenantId '$TenantId'" -ForegroundColor Yellow
-            } elseif ($errMsg -match 'not found|does not exist|invalid') {
-                Write-Host "    Subscription not found in tenant. Verify the subscription ID is correct." -ForegroundColor Yellow
-            } else {
-                Write-Host "    $errMsg" -ForegroundColor Gray
+        # Skip Set-AzContext if we already validated context for this subscription during auth
+        if ($script:currentSubContext -ne $subId) {
+            try {
+                Set-AzContext -SubscriptionId $subId -TenantId $TenantId -ErrorAction Stop | Out-Null
+                $script:currentSubContext = $subId
             }
-            $subsSkipped += $subId
-            continue
+            catch {
+                $errMsg = $_.Exception.Message
+                Write-Step -Step "Subscription" -Message "Cannot access $subId" -Status "Error"
+                if ($errMsg -match 'interaction is required|multi-factor|MFA|conditional access') {
+                    Write-Host "    Token expired or MFA required. Run: Connect-AzAccount -TenantId '$TenantId'" -ForegroundColor Yellow
+                } elseif ($errMsg -match 'not found|does not exist|invalid') {
+                    Write-Host "    Subscription not found in tenant. Verify the subscription ID is correct." -ForegroundColor Yellow
+                } else {
+                    Write-Host "    $errMsg" -ForegroundColor Gray
+                }
+                $subsSkipped += $subId
+                continue
+            }
         }
-    }
 
-    # ── Host Pools ──
-    Write-Step -Step "Host Pools" -Message "Enumerating..." -Status "Progress"
+        # ── Host Pools ──
+        Write-Step -Step "Host Pools" -Message "Enumerating..." -Status "Progress"
+    }
+    catch {
+        Write-Step -Step "Subscription" -Message "Unexpected error processing $subId: $($_.Exception.Message)" -Status "Error"
+        continue
+    }
     $hpObjs = Get-AzWvdHostPool -ErrorAction SilentlyContinue
     if ((SafeCount $hpObjs) -eq 0) {
         Write-Step -Step "Host Pools" -Message "No host pools found in this subscription" -Status "Warn"
