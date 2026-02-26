@@ -30,6 +30,10 @@
     Metric aggregation interval in minutes (5/15/30/60, default: 15)
 .PARAMETER IncludeCapacityReservations
     Collect capacity reservation group data
+.PARAMETER IncludeReservedInstances
+    Collect Azure Reserved Instance (RI) data from billing reservations.
+    Requires Az.Reservations module and Reservations Reader role at the
+    tenant or enrollment level.
 .PARAMETER IncludeQuotaUsage
     Collect per-region vCPU quota data
 .PARAMETER IncludeIncidentWindow
@@ -68,6 +72,7 @@ param(
     [ValidateSet(5, 15, 30, 60)]
     [int]$MetricsTimeGrainMinutes = 15,
     [switch]$IncludeCapacityReservations,
+    [switch]$IncludeReservedInstances,
     [switch]$IncludeQuotaUsage,
     [switch]$IncludeIncidentWindow,
     [datetime]$IncidentWindowStart = (Get-Date).AddDays(-14),
@@ -232,6 +237,7 @@ $vmMetrics = [System.Collections.Generic.List[object]]::new()
 $vmMetricsIncident = [System.Collections.Generic.List[object]]::new()
 $laResults = [System.Collections.Generic.List[object]]::new()
 $capacityReservationGroups = [System.Collections.Generic.List[object]]::new()
+$reservedInstances = [System.Collections.Generic.List[object]]::new()
 $quotaUsage = [System.Collections.Generic.List[object]]::new()
 
 # Misc helpers / caches
@@ -383,6 +389,20 @@ if ($missingModules.Count -gt 0) {
     }
     Write-Host ""
     exit 1
+}
+
+# Optional module: Az.Reservations (for -IncludeReservedInstances)
+$script:hasAzReservations = $false
+if ($IncludeReservedInstances) {
+    $azResModule = Get-Module -ListAvailable -Name 'Az.Reservations' | Select-Object -First 1
+    if ($azResModule) {
+        $script:hasAzReservations = $true
+        Write-Host "  ✓ Optional: Az.Reservations v$($azResModule.Version)" -ForegroundColor Green
+    } else {
+        Write-Host "  ⚠ Az.Reservations module not installed — cannot collect Reserved Instances" -ForegroundColor Yellow
+        Write-Host "    Install with: Install-Module -Name Az.Reservations -Scope CurrentUser -Force" -ForegroundColor Gray
+        Write-Host "    Also requires Reservations Reader role at the tenant or enrollment level" -ForegroundColor Gray
+    }
 }
 
 Write-Host ""
@@ -1734,6 +1754,90 @@ if ($IncludeQuotaUsage) {
 }
 
 # =========================================================
+# STEP 5 (optional): Reserved Instances
+# =========================================================
+if ($IncludeReservedInstances -and $script:hasAzReservations) {
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "  Collecting Reserved Instances" -ForegroundColor Cyan
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host ""
+
+    try {
+        Import-Module Az.Reservations -ErrorAction Stop
+        Write-Host "  Fetching reservation orders..." -ForegroundColor Gray
+
+        $allOrders = @(Get-AzReservationOrder -ErrorAction Stop)
+        Write-Host "    Found $($allOrders.Count) reservation order(s)" -ForegroundColor Gray
+
+        foreach ($order in $allOrders) {
+            $orderId = ($order.Id -split '/')[-1]
+            if (-not $orderId) { $orderId = $order.Name }
+            if (-not $orderId) { continue }
+
+            try {
+                $orderReservations = @(Get-AzReservation -ReservationOrderId $orderId -ErrorAction Stop)
+            }
+            catch {
+                Write-Host "    ⚠ Could not read order $orderId : $($_.Exception.Message)" -ForegroundColor Yellow
+                continue
+            }
+
+            foreach ($res in $orderReservations) {
+                # Defensive property extraction — Az.Reservations objects vary by module version
+                $skuName = $null
+                if ($res.PSObject.Properties['Sku']) {
+                    $skuName = if ($res.Sku -is [string]) { $res.Sku }
+                              elseif ($res.Sku.PSObject.Properties['Name']) { $res.Sku.Name }
+                              else { "$($res.Sku)" }
+                }
+                $skuName = $skuName ?? (SafeProp $res 'SkuName') ?? (SafeProp $res 'ReservedResourceType') ?? "Unknown"
+
+                $location  = (SafeProp $res 'Location') ?? ""
+                $quantity  = (SafeProp $res 'Quantity') ?? 0
+                $provState = (SafeProp $res 'ProvisioningState') ?? (SafeProp $res 'State') ?? "Unknown"
+                $displayName = (SafeProp $res 'DisplayName') ?? (SafeProp $res 'Name') ?? ""
+                $term      = (SafeProp $res 'Term') ?? ""
+                $appliedScope = (SafeProp $res 'AppliedScopeType') ?? (SafeProp $res 'UserFriendlyAppliedScopeType') ?? ""
+
+                # Expiry — try multiple property names
+                $expiry = (SafeProp $res 'ExpiryDate') ?? (SafeProp $res 'ExpiryDateTime') ?? $null
+                if ($expiry -and $expiry -is [string]) {
+                    try { $expiry = [datetime]::Parse($expiry) } catch { $expiry = $null }
+                }
+
+                $effectiveDate = (SafeProp $res 'EffectiveDateTime') ?? (SafeProp $res 'BenefitStartTime') ?? $null
+                if ($effectiveDate -and $effectiveDate -is [string]) {
+                    try { $effectiveDate = [datetime]::Parse($effectiveDate) } catch { $effectiveDate = $null }
+                }
+
+                $reservedInstances.Add([PSCustomObject]@{
+                    ReservationId     = if ($ScrubPII) { Protect-Value -Value ($res.Id ?? "") -Prefix "RI" -Length 6 } else { $res.Id ?? "" }
+                    ReservationName   = if ($ScrubPII) { Protect-Value -Value $displayName -Prefix "Res" -Length 4 } else { $displayName }
+                    SKU               = $skuName
+                    Location          = $location
+                    Quantity          = [int]$quantity
+                    ProvisioningState = $provState
+                    ExpiryDate        = $expiry
+                    EffectiveDate     = $effectiveDate
+                    Term              = $term
+                    AppliedScopeType  = $appliedScope
+                    Status            = if ($provState -eq "Succeeded") { "Active" } else { $provState }
+                    DaysUntilExpiry   = if ($expiry) { [math]::Max(0, [math]::Round(($expiry - (Get-Date)).TotalDays, 0)) } else { "Unknown" }
+                })
+            }
+        }
+
+        Write-Host "  ✓ Found $($reservedInstances.Count) reservation(s) across $($allOrders.Count) order(s)" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "  ⚠ Could not read reservations: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "    This usually means the account lacks Reservations Reader role at the tenant level" -ForegroundColor Gray
+    }
+
+    Write-Host ""
+}
+
+# =========================================================
 # EXPORT: Write Collection Pack
 # =========================================================
 Write-Host "" 
@@ -1742,8 +1846,9 @@ Write-Host "  Exporting Collection Pack" -ForegroundColor Cyan
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 Write-Host ""
 
-# Final exports (quota + metadata — other files already saved at checkpoints)
+# Final exports (quota + reserved instances + metadata — other files already saved at checkpoints)
 Export-PackJson -FileName "quota-usage.json" -Data $quotaUsage
+Export-PackJson -FileName "reserved-instances.json" -Data $reservedInstances
 
 # Metadata
 $metadata = [PSCustomObject]@{
@@ -1767,6 +1872,7 @@ $metadata = [PSCustomObject]@{
         KQLResults   = SafeCount $laResults
         AppGroups    = SafeCount $appGroups
         ScalingPlans = SafeCount $scalingPlans
+        ReservedInstances = SafeCount $reservedInstances
     }
     AnalysisErrors           = @()
     CollectorTool            = "avd-data-collector"
@@ -1824,6 +1930,9 @@ Write-Host "  Scaling Plans:   $(SafeCount $scalingPlans)" -ForegroundColor Whit
 Write-Host "  App Groups:      $(SafeCount $appGroups)" -ForegroundColor White
 if ($IncludeCapacityReservations) {
     Write-Host "  Capacity Res.:   $(SafeCount $capacityReservationGroups)" -ForegroundColor White
+}
+if ($IncludeReservedInstances) {
+    Write-Host "  Reserved Inst.:  $(SafeCount $reservedInstances)" -ForegroundColor White
 }
 if ($ScrubPII) {
     Write-Host "  PII:     Scrubbed (identifiers anonymized)" -ForegroundColor Magenta
