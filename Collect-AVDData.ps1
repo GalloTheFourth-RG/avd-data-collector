@@ -92,6 +92,7 @@
 .PARAMETER OutputPath
     Directory to write the collection pack (default: current directory)
 #>
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '')]
 param(
     # Initialize script-scoped variables
     
