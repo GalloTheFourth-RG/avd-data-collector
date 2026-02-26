@@ -327,6 +327,14 @@ $resourceTags = [System.Collections.Generic.List[object]]::new()
 # Track all AVD resource groups across subscriptions (SubId|RGName → $true)
 $avdResourceGroups = @{}
 
+# Raw subnet-to-subscription lookup for network topology (survives PII scrubbing)
+# Key = raw subnet ARM ID, Value = @{ SubId = ...; VmCount = 0 }
+$rawSubnetLookup = @{}
+
+# Raw host pool IDs for PE/diagnostic checks (survives PII scrubbing)
+# Key = scrubbed HP name, Value = raw ARM ID
+$rawHostPoolIds = @{}
+
 # Misc helpers / caches
 $vmMetrics = $vmMetrics
 
@@ -1079,6 +1087,10 @@ foreach ($subId in $SubscriptionIds) {
             Id                   = Protect-ArmId $hpId
         })
 
+        # Keep raw HP ID for PE/diagnostic lookups (before scrubbing makes it unusable)
+        $scrubHpName = Protect-HostPoolName $hpName
+        $rawHostPoolIds[$scrubHpName] = $hpId
+
         # Session Hosts
         Write-Step -Step "Session Hosts" -Message "$hpName" -Status "Progress"
         $shObjs = @()
@@ -1298,6 +1310,14 @@ foreach ($subId in $SubscriptionIds) {
             $rawId = Get-ArmIdSafe $vm
             if ($rawId) { $rawVmIds.Add($rawId) }
             try { if ($vm.Name) { $rawVmNames.Add($vm.Name) } } catch { }
+
+            # Track raw subnet IDs for network topology (before PII scrubbing)
+            if ($nicSubnetId) {
+                if (-not $rawSubnetLookup.ContainsKey($nicSubnetId)) {
+                    $rawSubnetLookup[$nicSubnetId] = @{ SubId = $subId; VmCount = 0 }
+                }
+                $rawSubnetLookup[$nicSubnetId].VmCount++
+            }
 
             $vms.Add([PSCustomObject]@{
                 SubscriptionId       = Protect-SubscriptionId $subId
@@ -1765,14 +1785,15 @@ if ($hasExtendedCollection) {
         if ($IncludeNetworkTopology -and $script:hasAzNetwork) {
             Write-Host "    Collecting network topology..." -ForegroundColor Gray
             $vnetCache = @{}
+            $rawNsgIds = @{}  # Track raw NSG IDs for evaluation (survives PII scrubbing)
 
-            # Subnet analysis — find unique subnets from VM data
-            $subVms = @($vms | Where-Object { -not $ScrubPII -and $_.SubscriptionId -eq $subId })
+            # Use raw subnet lookup built during VM collection (works with -ScrubPII)
             $uniqueSubnets = @{}
-            foreach ($sv in $subVms) {
-                $sId = $sv.SubnetId
-                if ($sId -and -not $uniqueSubnets.ContainsKey($sId)) { $uniqueSubnets[$sId] = @{ VmCount = 0 } }
-                if ($sId) { $uniqueSubnets[$sId].VmCount++ }
+            foreach ($sId in $rawSubnetLookup.Keys) {
+                $entry = $rawSubnetLookup[$sId]
+                if ($entry.SubId -eq $subId) {
+                    $uniqueSubnets[$sId] = @{ VmCount = $entry.VmCount }
+                }
             }
 
             foreach ($subnetId in $uniqueSubnets.Keys) {
@@ -1809,6 +1830,9 @@ if ($hasExtendedCollection) {
                     $rtId      = if ($hasRt) { $subnet.RouteTable.Id } else { "" }
                     $hasNatGw  = [bool]$subnet.NatGateway
                     $natGwId   = if ($hasNatGw) { $subnet.NatGateway.Id } else { "" }
+
+                    # Track raw NSG IDs for evaluation
+                    if ($nsgId -and -not $rawNsgIds.ContainsKey($nsgId)) { $rawNsgIds[$nsgId] = $true }
 
                     $subnetAnalysis.Add([PSCustomObject]@{
                         SubscriptionId = Protect-SubscriptionId $subId
@@ -1862,7 +1886,7 @@ if ($hasExtendedCollection) {
 
             # Private endpoint check per host pool
             foreach ($hp in $hostPools) {
-                $rawHpId = if (-not $ScrubPII) { SafeProp $hp 'Id' } else { $null }
+                $rawHpId = $rawHostPoolIds[$hp.HostPoolName]
                 if (-not $rawHpId) { continue }
                 try {
                     $peConns = @(Invoke-WithRetry { Get-AzPrivateEndpointConnection -PrivateLinkResourceId $rawHpId -ErrorAction SilentlyContinue })
@@ -1878,8 +1902,7 @@ if ($hasExtendedCollection) {
 
             # NSG rule evaluation
             $nsgCache = @{}
-            foreach ($sa in $subnetAnalysis) {
-                $rawNsgId = if (-not $ScrubPII) { $sa.NsgId } else { $null }
+            foreach ($rawNsgId in $rawNsgIds.Keys) {
                 if (-not $rawNsgId -or $rawNsgId -eq '') { continue }
                 if ($nsgCache.ContainsKey($rawNsgId)) { continue }
                 try {
@@ -2050,7 +2073,7 @@ if ($hasExtendedCollection) {
             Write-Host "    Collecting diagnostic settings..." -ForegroundColor Gray
             # Check host pools
             foreach ($hp in $hostPools) {
-                $rawHpId = if (-not $ScrubPII) { SafeProp $hp 'Id' } else { $null }
+                $rawHpId = $rawHostPoolIds[$hp.HostPoolName]
                 if (-not $rawHpId) { continue }
                 try {
                     $diagUri = "${rawHpId}/providers/Microsoft.Insights/diagnosticSettings?api-version=2021-05-01-preview"
