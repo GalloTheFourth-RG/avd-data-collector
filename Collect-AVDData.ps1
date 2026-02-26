@@ -1,11 +1,9 @@
-<#
-.SYNOPSIS
-    AVD Data Collector — Open-source data collection for Azure Virtual Desktop
-#>
-
 # PSScriptAnalyzer disable=PSAvoidUsingWriteHost,PSAvoidUsingEmptyCatchBlock,PSUseApprovedVerbs,PSReviewUnusedParameter,PSUseBOMForUnicodeEncodedFile
 
 <#
+.SYNOPSIS
+    AVD Data Collector — Open-source data collection for Azure Virtual Desktop
+
 .DESCRIPTION
     Collects ARM resource inventory, Azure Monitor metrics, and Log Analytics (KQL)
     query results from your AVD deployment and exports them as a portable collection
@@ -342,7 +340,6 @@ $rawSubnetLookup = @{}
 $rawHostPoolIds = @{}
 
 # Misc helpers / caches
-$vmMetrics = $vmMetrics
 
 # =========================================================
 # PowerShell 7 Requirement
@@ -914,7 +911,7 @@ function Expand-ScalingPlanEvidence {
         Id              = Protect-ArmId $planId
     })
 
-    foreach ($hpr in SafeArray $props.hostPoolReferences) {
+    foreach ($hpr in SafeArray (SafeProp $props 'hostPoolReferences')) {
         $hpArmId = SafeProp $hpr 'hostPoolArmPath'
         $scalingPlanAssignments.Add([PSCustomObject]@{
             SubscriptionId      = Protect-SubscriptionId $SubId
@@ -927,7 +924,7 @@ function Expand-ScalingPlanEvidence {
         })
     }
 
-    foreach ($sch in SafeArray $props.schedules) {
+    foreach ($sch in SafeArray (SafeProp $props 'schedules')) {
         $scalingPlanSchedules.Add([PSCustomObject]@{
             SubscriptionId        = Protect-SubscriptionId $SubId
             ResourceGroup         = Protect-ResourceGroup $rg
@@ -1036,7 +1033,7 @@ foreach ($subId in $SubscriptionIds) {
         Write-Step -Step "Host Pools" -Message "Enumerating..." -Status "Progress"
     }
     catch {
-        Write-Step -Step "Subscription" -Message "Unexpected error processing ${subId}: $($_.Exception.Message)" -Status "Error"
+        Write-Step -Step "Subscription" -Message "Unexpected error processing $(Protect-SubscriptionId $subId): $($_.Exception.Message)" -Status "Error"
         continue
     }
     $hpObjs = Get-AzWvdHostPool -ErrorAction SilentlyContinue
@@ -1478,7 +1475,7 @@ foreach ($subId in $SubscriptionIds) {
                 }
             }
             catch {
-                Write-Step -Step "VMSS Instances" -Message "Failed for $vmssName — $($_.Exception.Message)" -Status "Warn"
+                Write-Step -Step "VMSS Instances" -Message "Failed for $(Protect-Value -Value $vmssName -Prefix 'VMSS' -Length 4) — $($_.Exception.Message)" -Status "Warn"
             }
         }
     }
@@ -1539,7 +1536,7 @@ foreach ($subId in $SubscriptionIds) {
                         }
                     }
                     catch {
-                        Write-Step -Step "CRG Detail" -Message "Failed for $crgName" -Status "Warn"
+                        Write-Step -Step "CRG Detail" -Message "Failed for $(Protect-Value -Value $crgName -Prefix 'CRG' -Length 4)" -Status "Warn"
                     }
                 }
             }
@@ -2442,7 +2439,10 @@ else {
         $vmIdLabels[$vid] = if ($ScrubPII) {
             $parts = $vid -split '/'
             $vmName = $parts[-1]
-            "VM-" + $vmName.Substring(0, [math]::Min(2, $vmName.Length)) + "****"
+            $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+                [System.Text.Encoding]::UTF8.GetBytes($vmName)
+            )
+            "VM-" + [BitConverter]::ToString($hash[0..1]).Replace('-','')
         } else { $vid }
     }
 
@@ -2482,7 +2482,7 @@ else {
                 if (-not $metricObjectsAll -or ($metricObjectsAll | Measure-Object).Count -eq 0) {
                     Write-Host "    Get-AzMetric returned no metric objects for $($labels[$vmId])" -ForegroundColor Yellow
                     try {
-                        $res = Invoke-WithRetry { Get-AzResource -ResourceId $vmId -ErrorAction SilentlyContinue }
+                        $res = Get-AzResource -ResourceId $vmId -ErrorAction SilentlyContinue
                         if ($res) { Write-Host "    Resource exists: $($res.ResourceType) $($labels[$vmId]) ($($res.Location))" -ForegroundColor Gray }
                         else { Write-Host "    Get-AzResource returned no resource for $($labels[$vmId])" -ForegroundColor Yellow }
                     } catch { Write-Host "    Failed to query resource metadata: $($_.Exception.Message)" -ForegroundColor Yellow }
@@ -3052,7 +3052,7 @@ if ($IncludeCostData) {
         # Convert hashtable to list for JSON serialization
         $vmCostList = [System.Collections.Generic.List[object]]::new()
         foreach ($key in $vmActualMonthlyCost.Keys) {
-            $vmCostList.Add([PSCustomObject]@{ VMName = $key; MonthlyCost = $vmActualMonthlyCost[$key] })
+            $vmCostList.Add([PSCustomObject]@{ VMName = Protect-VMName $key; MonthlyCost = $vmActualMonthlyCost[$key] })
         }
         Export-PackJson -FileName "vm-actual-monthly-cost.json" -Data $vmCostList
     }
@@ -3277,7 +3277,7 @@ Write-Host "  Output:  $zipPath" -ForegroundColor Gray
 Write-Host ""
 
 if ((SafeCount $subsSkipped) -gt 0) {
-    Write-Host "  ⚠ Skipped subscriptions: $($subsSkipped -join ', ')" -ForegroundColor Yellow
+    Write-Host "  ⚠ Skipped subscriptions: $(($subsSkipped | ForEach-Object { Protect-SubscriptionId $_ }) -join ', ')" -ForegroundColor Yellow
     Write-Host ""
 }
 
