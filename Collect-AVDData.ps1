@@ -1,6 +1,11 @@
 <#
 .SYNOPSIS
     AVD Data Collector — Open-source data collection for Azure Virtual Desktop
+#>
+
+# PSScriptAnalyzer disable=PSAvoidUsingWriteHost,PSAvoidUsingEmptyCatchBlock,PSUseApprovedVerbs,PSReviewUnusedParameter,PSUseBOMForUnicodeEncodedFile
+
+<#
 .DESCRIPTION
     Collects ARM resource inventory, Azure Monitor metrics, and Log Analytics (KQL)
     query results from your AVD deployment and exports them as a portable collection
