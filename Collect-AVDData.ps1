@@ -1632,6 +1632,7 @@ else {
         # Handle cross-subscription workspace access
         $wsSubId = Get-SubFromArmId $wsId
         if ($wsSubId -and $wsSubId -ne $script:currentSubContext) {
+            Write-Host "    switching context to workspace subscription $wsSubId" -ForegroundColor Gray
             try {
                 Invoke-WithRetry { Set-AzContext -SubscriptionId $wsSubId -TenantId $TenantId -ErrorAction Stop | Out-Null }
                 $script:currentSubContext = $wsSubId
