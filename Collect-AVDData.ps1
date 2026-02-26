@@ -609,6 +609,11 @@ try {
     $baseOut = if ($OutputPath) { (Resolve-Path -Path $OutputPath).Path } else { (Get-Location).Path }
     $outFolder = Join-Path $baseOut $outFolderName
     if (-not (Test-Path $outFolder)) { New-Item -Path $outFolder -ItemType Directory -Force | Out-Null }
+    # start diagnostic transcript
+    $diagPath = Join-Path $outFolder 'diagnostic.log'
+    if (Get-Module -ListAvailable -Name Microsoft.PowerShell.Utility) {
+        Start-Transcript -Path $diagPath -Force | Out-Null
+    }
 }
 catch {
     $outFolder = Join-Path (Get-Location).Path "AVD-CollectionPack-$((Get-Date).ToString('yyyyMMdd-HHmmss'))"
@@ -1857,6 +1862,11 @@ try {
 catch {
     Write-Host ""
     Write-Host "  ⚠ Could not create ZIP — data is in folder: $outFolder" -ForegroundColor Yellow
+}
+
+# make sure diagnostic transcript is closed
+if (Get-Command Stop-Transcript -ErrorAction SilentlyContinue) {
+    Stop-Transcript | Out-Null
 }
 
 # =========================================================
