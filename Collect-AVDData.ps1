@@ -390,6 +390,22 @@ function Protect-SubscriptionId {
     return "****"
 }
 
+function Protect-TenantId {
+    param([string]$Value)
+    if (-not $ScrubPII) { return $Value }
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    if ($Value.Length -ge 4) { return "****-****-****-" + $Value.Substring($Value.Length - 4) }
+    return "****"
+}
+
+function Protect-Email {
+    param([string]$Value)
+    if (-not $ScrubPII) { return $Value }
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    if ($Value -match '^(.{2}).*(@.*)$') { return "$($matches[1])****$($matches[2])" }
+    return (Protect-Value -Value $Value -Prefix "Email" -Length 4)
+}
+
 function Protect-VMName       { param([string]$Value); return (Protect-Value -Value $Value -Prefix "Host" -Length 6) }
 function Protect-HostPoolName { param([string]$Value); return (Protect-Value -Value $Value -Prefix "Pool" -Length 4) }
 function Protect-ResourceGroup { param([string]$Value); return (Protect-Value -Value $Value -Prefix "RG" -Length 4) }
@@ -570,12 +586,12 @@ if (-not $existingContext -or -not $existingContext.Account) {
         Write-Host "  ✗ Azure login failed: $($_.Exception.Message)" -ForegroundColor Red
         Write-Host ""
         Write-Host "  Run this command first, then re-run the collector:" -ForegroundColor Yellow
-        Write-Host "    Connect-AzAccount -TenantId '$TenantId'" -ForegroundColor White
+        Write-Host "    Connect-AzAccount -TenantId '$(Protect-TenantId $TenantId)'" -ForegroundColor White
         Write-Host ""
         exit 1
     }
 } elseif ($existingContext.Tenant.Id -ne $TenantId) {
-    Write-Host "  ⚠ Current session is for tenant $($existingContext.Tenant.Id) — switching to $TenantId" -ForegroundColor Yellow
+    Write-Host "  ⚠ Current session is for tenant $(Protect-TenantId $existingContext.Tenant.Id) — switching to $(Protect-TenantId $TenantId)" -ForegroundColor Yellow
     try {
         Disable-AzContextAutosave -Scope Process -ErrorAction SilentlyContinue | Out-Null
         Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
@@ -603,7 +619,7 @@ catch {
     }
     catch {
         Write-Host "  ✗ Authentication failed: $($_.Exception.Message)" -ForegroundColor Red
-        Write-Host "    Run: Connect-AzAccount -TenantId '$TenantId'" -ForegroundColor White
+        Write-Host "    Run: Connect-AzAccount -TenantId '$(Protect-TenantId $TenantId)'" -ForegroundColor White
         exit 1
     }
 }
@@ -612,9 +628,9 @@ $isManagedIdentity = $existingContext -and $existingContext.Account.Type -eq 'Ma
 if ($isManagedIdentity) {
     Write-Host "  ✓ Authenticated via Managed Identity" -ForegroundColor Green
 } else {
-    Write-Host "  ✓ Authenticated as: $($existingContext.Account.Id)" -ForegroundColor Green
+    Write-Host "  ✓ Authenticated as: $(Protect-Email $existingContext.Account.Id)" -ForegroundColor Green
 }
-Write-Host "    Tenant: $TenantId" -ForegroundColor Gray
+Write-Host "    Tenant: $(Protect-TenantId $TenantId)" -ForegroundColor Gray
 
 # ── Subscription access pre-flight ──
 Write-Host ""
@@ -639,7 +655,7 @@ if ($subsFailed.Count -eq $SubscriptionIds.Count) {
     Write-Host "  ✗ None of the specified subscriptions are accessible." -ForegroundColor Red
     Write-Host "    Available subscriptions in this tenant:" -ForegroundColor Gray
     foreach ($s in ($availableSubs | Select-Object -First 10)) {
-        Write-Host "      • $($s.Name) ($($s.Id))" -ForegroundColor Gray
+        Write-Host "      • $(Protect-Value -Value $s.Name -Prefix 'Sub' -Length 4) ($(Protect-SubscriptionId $s.Id))" -ForegroundColor Gray
     }
     if ($availableSubs.Count -gt 10) { Write-Host "      ... and $($availableSubs.Count - 10) more" -ForegroundColor Gray }
     Write-Host ""
@@ -657,11 +673,11 @@ if ($LogAnalyticsWorkspaceResourceIds.Count -gt 0 -and -not $SkipLogAnalyticsQue
         $wsParts = ($wsId.TrimEnd('/') -split '/')
         if ($wsParts.Count -lt 9 -or $wsId -notmatch 'Microsoft\.OperationalInsights/workspaces') {
             Write-Host "  ⚠ Invalid workspace resource ID format:" -ForegroundColor Yellow
-            Write-Host "    $wsId" -ForegroundColor Gray
+            Write-Host "    $(Protect-ArmId $wsId)" -ForegroundColor Gray
             Write-Host "    Expected: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<name>" -ForegroundColor Gray
         } else {
             $wsName = $wsParts[8]
-            Write-Host "  ✓ $wsName" -ForegroundColor Green
+            Write-Host "  ✓ $(Protect-Value -Value $wsName -Prefix 'WS' -Length 4)" -ForegroundColor Green
         }
     }
 }
@@ -1005,7 +1021,7 @@ foreach ($subId in $SubscriptionIds) {
                 $errMsg = $_.Exception.Message
                 Write-Step -Step "Subscription" -Message "Cannot access $(Protect-SubscriptionId $subId)" -Status "Error"
                 if ($errMsg -match 'interaction is required|multi-factor|MFA|conditional access') {
-                    Write-Host "    Token expired or MFA required. Run: Connect-AzAccount -TenantId '$TenantId'" -ForegroundColor Yellow
+                    Write-Host "    Token expired or MFA required. Run: Connect-AzAccount -TenantId '$(Protect-TenantId $TenantId)'" -ForegroundColor Yellow
                 } elseif ($errMsg -match 'not found|does not exist|invalid') {
                     Write-Host "    Subscription not found in tenant. Verify the subscription ID is correct." -ForegroundColor Yellow
                 } else {
@@ -2420,6 +2436,16 @@ else {
     $metricsProcessed = [ref]0
     $metricsTotal = SafeCount $vmIds
 
+    # Build display-safe labels for parallel runspace (Protect-* unavailable in -Parallel)
+    $vmIdLabels = @{}
+    foreach ($vid in $vmIds) {
+        $vmIdLabels[$vid] = if ($ScrubPII) {
+            $parts = $vid -split '/'
+            $vmName = $parts[-1]
+            "VM-" + $vmName.Substring(0, [math]::Min(2, $vmName.Length)) + "****"
+        } else { $vid }
+    }
+
     $vmIds | ForEach-Object -Parallel {
         $vmId = $_
         $start = $using:metricsStart
@@ -2427,6 +2453,7 @@ else {
         $grain = $using:grain
         $bag   = $using:metricsCollected
         $processed = $using:metricsProcessed
+        $labels = $using:vmIdLabels
 
         # Primary metrics: CPU + Memory
         $metricNames = @("Percentage CPU", "Available Memory Bytes")
@@ -2438,7 +2465,7 @@ else {
 
         while ($attempt -lt $maxAttempts -and -not $success) {
             $attempt++
-            Write-Host "    Querying metrics for $vmId (attempt $attempt)" -ForegroundColor Gray
+            Write-Host "    Querying metrics for $($labels[$vmId]) (attempt $attempt)" -ForegroundColor Gray
             try {
                 # collect all aggregator results in one list
                 $metricObjectsAll = [System.Collections.Generic.List[object]]::new()
@@ -2453,14 +2480,14 @@ else {
                 }
 
                 if (-not $metricObjectsAll -or ($metricObjectsAll | Measure-Object).Count -eq 0) {
-                    Write-Host "    Get-AzMetric returned no metric objects for $vmId" -ForegroundColor Yellow
+                    Write-Host "    Get-AzMetric returned no metric objects for $($labels[$vmId])" -ForegroundColor Yellow
                     try {
                         $res = Invoke-WithRetry { Get-AzResource -ResourceId $vmId -ErrorAction SilentlyContinue }
-                        if ($res) { Write-Host "    Resource exists: $($res.ResourceType) $($res.Name) ($($res.Location))" -ForegroundColor Gray }
-                        else { Write-Host "    Get-AzResource returned no resource for $vmId" -ForegroundColor Yellow }
-                    } catch { Write-Host "    Failed to query resource metadata: ${($_.Exception.Message)}" -ForegroundColor Yellow }
+                        if ($res) { Write-Host "    Resource exists: $($res.ResourceType) $($labels[$vmId]) ($($res.Location))" -ForegroundColor Gray }
+                        else { Write-Host "    Get-AzResource returned no resource for $($labels[$vmId])" -ForegroundColor Yellow }
+                    } catch { Write-Host "    Failed to query resource metadata: $($_.Exception.Message)" -ForegroundColor Yellow }
                 } else {
-                    Write-Host "    Got metric types: $($metricObjectsAll.Count) for $vmId" -ForegroundColor Gray
+                    Write-Host "    Got metric types: $($metricObjectsAll.Count) for $($labels[$vmId])" -ForegroundColor Gray
                 }
 
                 foreach ($m in $metricObjectsAll) {
@@ -2492,7 +2519,7 @@ else {
             }
             catch {
                 $msg = $_.Exception.Message
-                Write-Host "    Get-AzMetric error for ${vmId}: ${msg}" -ForegroundColor Yellow
+                Write-Host "    Get-AzMetric error for $($labels[$vmId]): ${msg}" -ForegroundColor Yellow
                 if ($msg -match '429|throttl' -and $attempt -lt $maxAttempts) {
                     $backoff = @(15, 45, 135)[$attempt - 1]
                     Write-Host "    throttled, backing off ${backoff} seconds" -ForegroundColor Yellow
@@ -2710,19 +2737,20 @@ else {
         # Handle cross-subscription workspace access
         $wsSubId = Get-SubFromArmId $wsId
         if ($wsSubId -and $wsSubId -ne $script:currentSubContext) {
-            Write-Host "    switching context to workspace subscription $wsSubId" -ForegroundColor Gray
+            Write-Host "    switching context to workspace subscription $(Protect-SubscriptionId $wsSubId)" -ForegroundColor Gray
             try {
                 Invoke-WithRetry { Set-AzContext -SubscriptionId $wsSubId -TenantId $TenantId -ErrorAction Stop | Out-Null }
                 $script:currentSubContext = $wsSubId
             }
             catch {
-                Write-Step -Step "KQL" -Message "Cannot access workspace subscription $wsSubId — $($_.Exception.Message)" -Status "Error"
+                Write-Step -Step "KQL" -Message "Cannot access workspace subscription $(Protect-SubscriptionId $wsSubId) — $($_.Exception.Message)" -Status "Error"
                 continue
             }
         }
 
         $wsName = Get-NameFromArmId $wsId
-        Write-Step -Step "KQL" -Message "Workspace: $wsName" -Status "Progress"
+        $wsNameSafe = Protect-Value -Value $wsName -Prefix 'WS' -Length 4
+        Write-Step -Step "KQL" -Message "Workspace: $wsNameSafe" -Status "Progress"
 
         # Run TableDiscovery first (sequential) to validate connectivity
         $tdQuery = $queryDispatchList | Where-Object { $_.Label -eq "CurrentWindow_TableDiscovery" } | Select-Object -First 1
@@ -2806,7 +2834,7 @@ else {
             $laResults.Add($item)
         }
 
-        Write-Step -Step "KQL" -Message "$wsName — $(SafeCount $kqlCollected) results collected" -Status "Done"
+        Write-Step -Step "KQL" -Message "$wsNameSafe — $(SafeCount $kqlCollected) results collected" -Status "Done"
     }
 
     # clear progress display when finished
