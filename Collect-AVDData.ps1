@@ -43,51 +43,162 @@
     Skip interactive disclaimer prompt
 .PARAMETER OutputPath
     Directory to write the collection pack (default: current directory)
-.EXAMPLE
-    .\Collect-AVDData.ps1 -TenantId "abc" -SubscriptionIds @("sub1") -DryRun
-.EXAMPLE
-    .\Collect-AVDData.ps1 -TenantId "abc" -SubscriptionIds @("sub1") -LogAnalyticsWorkspaceResourceIds @("/subscriptions/.../workspaces/ws1")
-.LINK
-    https://github.com/intrepidtechie/avd-data-collector
 #>
-[CmdletBinding()]
 param(
+    # Initialize script-scoped variables
+    
     [Parameter(Mandatory = $true)]
     [string]$TenantId,
-
     [Parameter(Mandatory = $true)]
     [string[]]$SubscriptionIds,
-
     [string[]]$LogAnalyticsWorkspaceResourceIds = @(),
-
     [switch]$SkipAzureMonitorMetrics,
     [switch]$SkipLogAnalyticsQueries,
-
     [ValidateRange(1, 30)]
     [int]$MetricsLookbackDays = 7,
-
     [ValidateSet(5, 15, 30, 60)]
     [int]$MetricsTimeGrainMinutes = 15,
-
     [switch]$IncludeCapacityReservations,
     [switch]$IncludeQuotaUsage,
-
     [switch]$IncludeIncidentWindow,
     [datetime]$IncidentWindowStart = (Get-Date).AddDays(-14),
     [datetime]$IncidentWindowEnd = (Get-Date),
-
     [switch]$ScrubPII,
-
     [switch]$DryRun,
     [switch]$SkipDisclaimer,
     [string]$OutputPath = "."
 )
+
+# Initialize script-scoped variables
+$script:currentSubContext = $null
+
+# Ensure Write-Step is defined before any usage
+function Write-Step {
+    param([string]$Step, [string]$Message, [string]$Status = "Start")
+    $prefix = switch ($Status) {
+        "Start"    { "  " }
+        "Progress" { "    " }
+        "Done"     { "  [OK] " }
+        "Skip"     { "  [SKIP] " }
+        "Warn"     { "  [WARN] " }
+        "Error"    { "  [ERR] " }
+    }
+    $color = switch ($Status) {
+        "Start"    { "Cyan" }
+        "Progress" { "Gray" }
+        "Done"     { "Green" }
+        "Skip"     { "Yellow" }
+        "Warn"     { "Yellow" }
+        "Error"    { "Red" }
+    }
+    if ($Status -eq "Progress") {
+        Write-Host "${prefix}${Message}" -ForegroundColor $color
+    } else {
+        Write-Host "${prefix}${Step} - ${Message}" -ForegroundColor $color
+    }
+}
+
+# Ensure SafeCount is defined before any usage
+if (-not (Get-Command SafeCount -ErrorAction SilentlyContinue)) {
+    function SafeCount {
+        param([object]$Obj)
+        if ($null -eq $Obj) { return 0 }
+        if ($Obj -is [System.Collections.ICollection]) { return $Obj.Count }
+        return @($Obj).Count
+    }
+}
+
+# Ensure SafeArray is available before first usage
+if (-not (Get-Command SafeArray -ErrorAction SilentlyContinue)) {
+    function SafeArray {
+        param([object]$Obj)
+        if ($null -eq $Obj) { return @() }
+        return @($Obj)
+    }
+}
+
+# Ensure SafeProp and SafeArmProp are available early (used during ARM collection)
+if (-not (Get-Command SafeProp -ErrorAction SilentlyContinue)) {
+    function SafeProp {
+        param([object]$Obj, [string]$Name)
+        if ($null -eq $Obj) { return $null }
+        if ($Obj.PSObject.Properties.Name -contains $Name) { return $Obj.$Name }
+        return $null
+    }
+}
+
+if (-not (Get-Command SafeArmProp -ErrorAction SilentlyContinue)) {
+    function SafeArmProp {
+        param([object]$Obj, [string]$Name)
+        if ($null -eq $Obj) { return $null }
+        if ($Obj.PSObject.Properties.Name -contains $Name) { return $Obj.$Name }
+        if ($Obj.PSObject.Properties.Name -contains 'Properties') {
+            $p = $Obj.Properties
+            if ($null -ne $p -and $p.PSObject.Properties.Name -contains $Name) { return $p.$Name }
+        }
+        if ($Obj.PSObject.Properties.Name -contains 'ResourceProperties') {
+            $rp = $Obj.ResourceProperties
+            if ($null -ne $rp -and $rp.PSObject.Properties.Name -contains $Name) { return $rp.$Name }
+        }
+        return $null
+    }
+}
+
+# Provide Get-ArmIdSafe early for callers in Step 1
+if (-not (Get-Command Get-ArmIdSafe -ErrorAction SilentlyContinue)) {
+    function Get-ArmIdSafe {
+        param([object]$Obj)
+        if ($null -eq $Obj) { return "" }
+        if ($Obj.PSObject.Properties.Name -contains 'Id') { return $Obj.Id }
+        if ($Obj.PSObject.Properties.Name -contains 'ResourceId') { return $Obj.ResourceId }
+        return ""
+    }
+}
+
+if (-not (Get-Command Get-NameFromArmId -ErrorAction SilentlyContinue)) {
+    function Get-NameFromArmId {
+        param([string]$ArmId)
+        if ([string]::IsNullOrEmpty($ArmId)) { return "" }
+        $parts = $ArmId -split '/'
+        if ($parts.Count -ge 1) { return $parts[-1] }
+        return ""
+    }
+}
+
+if (-not (Get-Command Get-SubFromArmId -ErrorAction SilentlyContinue)) {
+    function Get-SubFromArmId {
+        param([string]$ArmId)
+        if ([string]::IsNullOrEmpty($ArmId)) { return "" }
+        $parts = $ArmId -split '/'
+        if ($parts.Count -ge 3) { return $parts[2] }
+        return ""
+    }
+}
 
 $WarningPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $script:ScriptVersion = "1.0.0"
 $script:SchemaVersion = "1.1"
+
+# Initialize main collection containers
+$hostPools = [System.Collections.Generic.List[object]]::new()
+$sessionHosts = [System.Collections.Generic.List[object]]::new()
+$vms = [System.Collections.Generic.List[object]]::new()
+$vmss = [System.Collections.Generic.List[object]]::new()
+$vmssInstances = [System.Collections.Generic.List[object]]::new()
+$appGroups = [System.Collections.Generic.List[object]]::new()
+$scalingPlans = [System.Collections.Generic.List[object]]::new()
+$scalingPlanAssignments = [System.Collections.Generic.List[object]]::new()
+$scalingPlanSchedules = [System.Collections.Generic.List[object]]::new()
+$vmMetrics = [System.Collections.Generic.List[object]]::new()
+$vmMetricsIncident = [System.Collections.Generic.List[object]]::new()
+$laResults = [System.Collections.Generic.List[object]]::new()
+$capacityReservationGroups = [System.Collections.Generic.List[object]]::new()
+$quotaUsage = [System.Collections.Generic.List[object]]::new()
+
+# Misc helpers / caches
+$vmMetrics = $vmMetrics
 
 # =========================================================
 # PowerShell 7 Requirement
@@ -159,10 +270,9 @@ function Protect-SubnetId {
     return (Protect-Value -Value $Value -Prefix "Subnet" -Length 6)
 }
 
-# Scrub known PII columns in KQL result rows
 function Scrub-KqlRow {
     param([PSCustomObject]$Row)
-    if (-not $ScrubPII) { return }
+    if (-not $ScrubPII) { return $Row }
     foreach ($p in @($Row.PSObject.Properties)) {
         if ($null -eq $p.Value -or $p.Value -eq '') { continue }
         $val = [string]$p.Value
@@ -187,16 +297,12 @@ function Scrub-KqlRow {
             }
         }
     }
-}
+    return $Row
 
 # =========================================================
 # Helpers
 # =========================================================
-function SafeArray {
-    param([object]$Obj)
-    if ($null -eq $Obj) { return @() }
-    return @($Obj)
-}
+## SafeArray is defined earlier to ensure availability before usage
 
 function SafeCount {
     param([object]$Obj)
@@ -316,186 +422,141 @@ foreach ($module in $requiredModules) {
         Write-Host "  ✓ Found: $($module.Name) v$($installed.Version)" -ForegroundColor Green
     }
 }
-
-if (@($missingModules).Count -gt 0) {
-    Write-Host "`nERROR: Missing required modules" -ForegroundColor Red
-    Write-Host "Install with: Install-Module -Name $($missingModules -join ', ')" -ForegroundColor Yellow
-    exit 1
-}
-
-Write-Host "✓ All prerequisites validated`n" -ForegroundColor Green
-
-# =========================================================
-# Disclaimer
-# =========================================================
-if (-not $SkipDisclaimer) {
-    Write-Host "========================================================================" -ForegroundColor Yellow
-    Write-Host "                    DISCLAIMER — READ-ONLY TOOL" -ForegroundColor Yellow
-    Write-Host "========================================================================" -ForegroundColor Yellow
+    $totalSteps = if ($SkipLogAnalyticsQueries) { 3 } else { 4 }
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "  Step 2 of $totalSteps`: Collecting Log Analytics Perf Metrics" -ForegroundColor Cyan
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "This script is provided AS-IS. It performs READ-ONLY operations" -ForegroundColor White
-    Write-Host "against your Azure environment — nothing is modified." -ForegroundColor White
-    Write-Host ""
-    Write-Host "Data collected stays local. Nothing is sent externally." -ForegroundColor White
-    Write-Host ""
-    Write-Host "Press any key to continue or Ctrl+C to exit..." -ForegroundColor Cyan
-    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-    Write-Host ""
-}
 
-# =========================================================
-# Authentication
-# =========================================================
-Write-Host "Authenticating to Azure..." -ForegroundColor Cyan
-
-$existingContext = Get-AzContext -ErrorAction SilentlyContinue
-$isManagedIdentity = $existingContext -and $existingContext.Account.Type -eq 'ManagedService'
-
-if ($isManagedIdentity) {
-    Write-Host "  ✓ Using existing Managed Identity connection" -ForegroundColor Green
-    Write-Host "    Tenant: $($existingContext.Tenant.Id)" -ForegroundColor Gray
-}
-elseif ($existingContext -and $existingContext.Account -and $existingContext.Tenant.Id -eq $TenantId) {
-    # Already logged in to the correct tenant — validate the session is still usable
-    # Use Set-AzContext instead of Get-AzSubscription to catch expired MFA/conditional access tokens
-    $tokenValid = $false
-    $availableSubs = @()
-    try {
-        Set-AzContext -SubscriptionId $SubscriptionIds[0] -TenantId $TenantId -ErrorAction Stop | Out-Null
-        $tokenValid = $true
-        # Fetch subscription list for verification display
-        try { $availableSubs = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop) } catch {}
+    # Build VM name list for Log Analytics perf queries.
+    # Use the raw (unscrubbed) VM names when available so queries match the 'Computer' field.
+    if (Get-Variable -Name rawVmNames -Scope Script -ErrorAction SilentlyContinue -and (SafeCount $rawVmNames) -gt 0) {
+        $vmNames = @($rawVmNames | Select-Object -Unique)
     }
-    catch {
-        Write-Host "  ⚠ Session expired or MFA required — re-authenticating..." -ForegroundColor Yellow
+    elseif (SafeCount $vms -gt 0) {
+        # vms may contain protected/anonymized names when -ScrubPII is used; only use when no raw names present
+        $vmNames = @($vms | Where-Object { $_.VMName } | Select-Object -ExpandProperty VMName -Unique)
     }
-    if ($tokenValid) {
-        Write-Host "  ✓ Using existing Az session: $($existingContext.Account.Id)" -ForegroundColor Green
-        Write-Host "    Tenant: $($existingContext.Tenant.Id)" -ForegroundColor Gray
+    else {
+        $vmNames = @()
+    }
+    $metricsEnd   = Get-Date
+    $metricsStart = $metricsEnd.AddDays(-$MetricsLookbackDays)
+    $grain = $MetricsTimeGrainMinutes
 
-        # Verify each requested subscription is accessible and show friendly names
-        if ($availableSubs.Count -gt 0) {
-            $availableSubIds = @($availableSubs | ForEach-Object { $_.Id })
-            foreach ($subId in $SubscriptionIds) {
-                if ($subId -notin $availableSubIds) {
-                    Write-Host "  ⚠ Subscription $subId is not accessible with this account" -ForegroundColor Yellow
-                    $closestMatch = $availableSubs | Where-Object { $_.Name -match 'vdi|avd|desktop' -or $_.Id -like "$($subId.Substring(0,8))*" } | Select-Object -First 1
-                    if ($closestMatch) {
-                        Write-Host "    Did you mean: $($closestMatch.Name) ($($closestMatch.Id))?" -ForegroundColor Yellow
-                    }
-                    Write-Host "    Available subscriptions in this tenant:" -ForegroundColor Gray
-                    foreach ($s in ($availableSubs | Select-Object -First 10)) {
-                        Write-Host "      - $($s.Name) ($($s.Id))" -ForegroundColor Gray
-                    }
-                    if ($availableSubs.Count -gt 10) { Write-Host "      ... and $($availableSubs.Count - 10) more" -ForegroundColor Gray }
-                } else {
-                    $subMatch = $availableSubs | Where-Object { $_.Id -eq $subId } | Select-Object -First 1
-                    $subName = if ($subMatch) { $subMatch.Name } else { $subId }
-                    Write-Host "    ✓ Subscription verified: $subName ($subId)" -ForegroundColor Green
+    Write-Host "  Collecting Perf metrics for $(SafeCount $vmNames) VMs ($MetricsLookbackDays-day lookback, ${MetricsTimeGrainMinutes}m grain)" -ForegroundColor Gray
+    Write-Host ""
+
+    $metricsCollected = [System.Collections.Generic.List[object]]::new()
+    $metricsTotal = SafeCount $vmNames
+
+    foreach ($wsId in $LogAnalyticsWorkspaceResourceIds) {
+        $parts = $wsId.TrimEnd('/') -split '/'
+        $resourceGroupName = $parts[4]
+        $workspaceName     = $parts[8]
+        $workspace = Get-AzOperationalInsightsWorkspace -ResourceGroupName $resourceGroupName -Name $workspaceName -ErrorAction Stop
+        $workspaceId = $workspace.CustomerId
+
+        foreach ($vmName in $vmNames) {
+            $kql = @"
+Perf
+| where Computer == '$vmName'
+| where TimeGenerated between (datetime($metricsStart) .. datetime($metricsEnd))
+| where (ObjectName == 'Processor' and CounterName == '% Processor Time' and InstanceName == '_Total')
+   or (ObjectName == 'Memory' and CounterName == 'Available MBytes')
+| summarize AvgValue=avg(CounterValue), MaxValue=max(CounterValue) by Computer, ObjectName, CounterName, bin(TimeGenerated, ${grain}m)
+| order by TimeGenerated asc
+"@
+            $result = Invoke-AzOperationalInsightsQuery -WorkspaceId $workspaceId -Query $kql -ErrorAction Stop
+            if ($result.Results) {
+                foreach ($row in $result.Results) {
+                    $metric = if ($row.ObjectName -eq 'Processor') { 'Percentage CPU' } elseif ($row.ObjectName -eq 'Memory') { 'Available Memory Bytes' } else { $row.CounterName }
+                    $metricsCollected.Add([PSCustomObject]@{
+                        VmName      = $row.Computer
+                        Metric      = $metric
+                        Aggregation = 'Average'
+                        TimeStamp   = $row.TimeGenerated
+                        Value       = if ($metric -eq 'Available Memory Bytes') { $row.AvgValue * 1MB } else { $row.AvgValue }
+                    })
+                    $metricsCollected.Add([PSCustomObject]@{
+                        VmName      = $row.Computer
+                        Metric      = $metric
+                        Aggregation = 'Maximum'
+                        TimeStamp   = $row.TimeGenerated
+                        Value       = if ($metric -eq 'Available Memory Bytes') { $row.MaxValue * 1MB } else { $row.MaxValue }
+                    })
                 }
             }
         }
     }
-    else {
-        Disable-AzContextAutosave -Scope Process | Out-Null
-        Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
-        Connect-AzAccount -TenantId $TenantId | Out-Null
-        Set-AzContext -SubscriptionId $SubscriptionIds[0] -TenantId $TenantId -ErrorAction Stop | Out-Null
+
+    foreach ($item in $metricsCollected) {
+        if ($ScrubPII) { $item.VmName = Protect-VMName $item.VmName }
+        $vmMetrics.Add($item)
     }
-}
-else {
-    if ($existingContext -and $existingContext.Tenant.Id -ne $TenantId) {
-        Write-Host "  ⚠ Current session is for tenant $($existingContext.Tenant.Id) — switching to $TenantId" -ForegroundColor Yellow
-    }
-    Disable-AzContextAutosave -Scope Process | Out-Null
-    Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
-    Connect-AzAccount -TenantId $TenantId | Out-Null
-    Set-AzContext -SubscriptionId $SubscriptionIds[0] -TenantId $TenantId -ErrorAction Stop | Out-Null
-}
 
-# Track which subscription context is already set to avoid redundant Set-AzContext calls
-$script:currentSubContext = $SubscriptionIds[0]
-
-Write-Host ""
-
-# =========================================================
-# DRY RUN MODE
-# =========================================================
-if ($DryRun) {
-    Write-Host "╔═══════════════════════════════════════════════════════════════════════╗" -ForegroundColor Yellow
-    Write-Host "║                         DRY RUN MODE                                  ║" -ForegroundColor Yellow
-    Write-Host "║                   No data will be collected                           ║" -ForegroundColor Yellow
-    Write-Host "╚═══════════════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
+    Write-Host "  ✓ Metrics collected: $(SafeCount $vmMetrics) datapoints for $metricsTotal VMs" -ForegroundColor Green
     Write-Host ""
 
-    $totalVMs = 0
-    $totalHostPools = 0
-    foreach ($subId in $SubscriptionIds) {
-        try {
-            Set-AzContext -SubscriptionId $subId -TenantId $TenantId | Out-Null
-            $vmsInSub = (Get-AzVM -ErrorAction SilentlyContinue | Measure-Object).Count
-            $hpsInSub = (Get-AzWvdHostPool -ErrorAction SilentlyContinue | Measure-Object).Count
-            $totalVMs += $vmsInSub
-            $totalHostPools += $hpsInSub
-            Write-Host "  Subscription $($subId): ~$vmsInSub VMs, ~$hpsInSub host pools" -ForegroundColor Gray
+    # ── Incident Window Metrics (optional) ──
+    if ($IncludeIncidentWindow) {
+        Write-Host "  Collecting incident window Perf metrics ($IncidentWindowStart → $IncidentWindowEnd)..." -ForegroundColor Cyan
+
+        $incidentCollected = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($wsId in $LogAnalyticsWorkspaceResourceIds) {
+            $parts = $wsId.TrimEnd('/') -split '/'
+            $resourceGroupName = $parts[4]
+            $workspaceName     = $parts[8]
+            $workspace = Get-AzOperationalInsightsWorkspace -ResourceGroupName $resourceGroupName -Name $workspaceName -ErrorAction Stop
+            $workspaceId = $workspace.CustomerId
+
+            foreach ($vmName in $vmNames) {
+                $kql = @"
+Perf
+| where Computer == '$vmName'
+| where TimeGenerated between (datetime($IncidentWindowStart) .. datetime($IncidentWindowEnd))
+| where (ObjectName == 'Processor' and CounterName == '% Processor Time' and InstanceName == '_Total')
+   or (ObjectName == 'Memory' and CounterName == 'Available MBytes')
+| summarize AvgValue=avg(CounterValue), MaxValue=max(CounterValue) by Computer, ObjectName, CounterName, bin(TimeGenerated, ${grain}m)
+| order by TimeGenerated asc
+"@
+                $result = Invoke-AzOperationalInsightsQuery -WorkspaceId $workspaceId -Query $kql -ErrorAction Stop
+                if ($result.Results) {
+                    foreach ($row in $result.Results) {
+                        $metric = if ($row.ObjectName -eq 'Processor') { 'Percentage CPU' } elseif ($row.ObjectName -eq 'Memory') { 'Available Memory Bytes' } else { $row.CounterName }
+                        $incidentCollected.Add([PSCustomObject]@{
+                            VmName      = $row.Computer
+                            Metric      = $metric
+                            Aggregation = 'Average'
+                            TimeStamp   = $row.TimeGenerated
+                            Value       = if ($metric -eq 'Available Memory Bytes') { $row.AvgValue * 1MB } else { $row.AvgValue }
+                        })
+                        $incidentCollected.Add([PSCustomObject]@{
+                            VmName      = $row.Computer
+                            Metric      = $metric
+                            Aggregation = 'Maximum'
+                            TimeStamp   = $row.TimeGenerated
+                            Value       = if ($metric -eq 'Available Memory Bytes') { $row.MaxValue * 1MB } else { $row.MaxValue }
+                        })
+                    }
+                }
+            }
         }
-        catch {
-            Write-Host "  ⚠ Could not query subscription $subId" -ForegroundColor Yellow
+
+        foreach ($item in $incidentCollected) {
+            if ($ScrubPII) { $item.VmName = Protect-VMName $item.VmName }
+            $vmMetricsIncident.Add($item)
         }
+        Write-Host "  ✓ Incident window metrics collected: $(SafeCount $vmMetricsIncident) datapoints" -ForegroundColor Green
+        Write-Host ""
     }
-
-    $estimatedMinutes = 3 + [math]::Max(1, [math]::Ceiling($totalVMs / 50)) + 2
-    if ($SkipAzureMonitorMetrics) { $estimatedMinutes = 5 }
-
-    Write-Host ""
-    Write-Host "Collection Preview:" -ForegroundColor Cyan
-    Write-Host "  Subscriptions:   $(SafeCount $SubscriptionIds)" -ForegroundColor White
-    Write-Host "  Host Pools:      ~$totalHostPools" -ForegroundColor White
-    Write-Host "  VMs:             ~$totalVMs" -ForegroundColor White
-    Write-Host "  Metrics lookback: $MetricsLookbackDays days" -ForegroundColor White
-    Write-Host "  KQL queries:     $(if ($SkipLogAnalyticsQueries) { 'Skipped' } else { '36 queries' })" -ForegroundColor White
-    Write-Host "  Estimated time:  ~$estimatedMinutes minutes" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "Remove -DryRun to run the actual collection." -ForegroundColor Yellow
-    exit 0
 }
-
-# =========================================================
-# Output Folder
-# =========================================================
-$ts = Get-Date -Format "yyyyMMdd-HHmmss"
-$packFolderName = "AVD-CollectionPack-$ts"
-$outFolder = Join-Path $OutputPath $packFolderName
-New-Item -ItemType Directory -Path $outFolder -Force -ErrorAction SilentlyContinue | Out-Null
-if (-not (Test-Path $outFolder)) {
-    $outFolder = Join-Path $env:TEMP $packFolderName
-    New-Item -ItemType Directory -Path $outFolder -Force | Out-Null
-    Write-Host "  ⚠ Could not create output folder — using $outFolder" -ForegroundColor Yellow
-}
-
-Write-Host "Output folder: $outFolder" -ForegroundColor Gray
-Write-Host ""
-
-# =========================================================
-# Data Containers
-# =========================================================
-$hostPools              = [System.Collections.Generic.List[object]]::new()
-$sessionHosts           = [System.Collections.Generic.List[object]]::new()
-$vms                    = [System.Collections.Generic.List[object]]::new()
-$vmss                   = [System.Collections.Generic.List[object]]::new()
-$vmssInstances          = [System.Collections.Generic.List[object]]::new()
-$appGroups              = [System.Collections.Generic.List[object]]::new()
-$scalingPlans           = [System.Collections.Generic.List[object]]::new()
-$scalingPlanAssignments = [System.Collections.Generic.List[object]]::new()
-$scalingPlanSchedules   = [System.Collections.Generic.List[object]]::new()
-$vmMetrics              = [System.Collections.Generic.List[object]]::new()
-$vmMetricsIncident      = [System.Collections.Generic.List[object]]::new()
-$laResults              = [System.Collections.Generic.List[object]]::new()
-$capacityReservationGroups = [System.Collections.Generic.List[object]]::new()
-$quotaUsage             = [System.Collections.Generic.List[object]]::new()
 
 # Raw VM ARM IDs for metrics collection (unaffected by PII scrubbing)
 $rawVmIds               = [System.Collections.Generic.List[string]]::new()
+# Raw VM names for Log Analytics perf queries (unaffected by PII scrubbing)
+$rawVmNames             = [System.Collections.Generic.List[string]]::new()
 
 # NIC cache: batch-fetch per RG
 $nicCacheByRg = @{}
@@ -510,6 +571,19 @@ $script:diskEncCache = @{}
 
 # Timing
 $script:collectionStart = Get-Date
+
+# Output folder (create early so exports work)
+try {
+    $timeStamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $outFolderName = "AVD-CollectionPack-$timeStamp"
+    $baseOut = if ($OutputPath) { (Resolve-Path -Path $OutputPath).Path } else { (Get-Location).Path }
+    $outFolder = Join-Path $baseOut $outFolderName
+    if (-not (Test-Path $outFolder)) { New-Item -Path $outFolder -ItemType Directory -Force | Out-Null }
+}
+catch {
+    $outFolder = Join-Path (Get-Location).Path "AVD-CollectionPack-$((Get-Date).ToString('yyyyMMdd-HHmmss'))"
+    if (-not (Test-Path $outFolder)) { New-Item -Path $outFolder -ItemType Directory -Force | Out-Null }
+}
 
 # =========================================================
 # KQL Query Loading
@@ -1020,9 +1094,10 @@ foreach ($subId in $SubscriptionIds) {
             # Zones
             $zones = if ($vm.Zones) { ($vm.Zones -join ",") } else { "" }
 
-            # Keep raw ARM ID for metrics collection (before PII scrubbing)
+            # Keep raw ARM ID and VM name for metrics/log analytics collection (before PII scrubbing)
             $rawId = Get-ArmIdSafe $vm
             if ($rawId) { $rawVmIds.Add($rawId) }
+            try { if ($vm.Name) { $rawVmNames.Add($vm.Name) } } catch { }
 
             $vms.Add([PSCustomObject]@{
                 SubscriptionId       = Protect-SubscriptionId $subId
@@ -1235,7 +1310,8 @@ else {
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
     Write-Host ""
 
-    $vmIds = @($rawVmIds | Select-Object -Unique)
+    # Normalize VM IDs: remove empty/whitespace entries and deduplicate
+    $vmIds = @($rawVmIds | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ -ne '' } | Select-Object -Unique)
     $metricsEnd   = Get-Date
     $metricsStart = $metricsEnd.AddDays(-$MetricsLookbackDays)
     $grain = [TimeSpan]::FromMinutes($MetricsTimeGrainMinutes)
@@ -1265,31 +1341,52 @@ else {
 
         while ($attempt -lt $maxAttempts -and -not $success) {
             $attempt++
+            Write-Host "    Querying metrics for $vmId (attempt $attempt)" -ForegroundColor Gray
             try {
-                $metricObjects = Get-AzMetric `
-                    -ResourceId $vmId `
-                    -MetricName $metricNames `
-                    -Aggregation $aggregations `
-                    -StartTime $start -EndTime $end -TimeGrain $grain `
-                    -ErrorAction Stop
+                # collect all aggregator results in one list
+                $metricObjectsAll = [System.Collections.Generic.List[object]]::new()
+                foreach ($aggType in $aggregations) {
+                    $objs = Get-AzMetric `
+                        -ResourceId $vmId `
+                        -MetricName $metricNames `
+                        -AggregationType $aggType `
+                        -StartTime $start -EndTime $end -TimeGrain $grain `
+                        -ErrorAction Stop
+                    if ($objs) { $metricObjectsAll.AddRange($objs) }
+                }
 
-                foreach ($m in $metricObjects) {
+                if (-not $metricObjectsAll -or ($metricObjectsAll | Measure-Object).Count -eq 0) {
+                    Write-Host "    Get-AzMetric returned no metric objects for $vmId" -ForegroundColor Yellow
+                    try {
+                        $res = Get-AzResource -ResourceId $vmId -ErrorAction SilentlyContinue
+                        if ($res) { Write-Host "    Resource exists: $($res.ResourceType) $($res.Name) ($($res.Location))" -ForegroundColor Gray }
+                        else { Write-Host "    Get-AzResource returned no resource for $vmId" -ForegroundColor Yellow }
+                    } catch { Write-Host "    Failed to query resource metadata: ${($_.Exception.Message)}" -ForegroundColor Yellow }
+                } else {
+                    Write-Host "    Got metric types: $($metricObjectsAll.Count) for $vmId" -ForegroundColor Gray
+                }
+
+                foreach ($m in $metricObjectsAll) {
                     $mName = $m.Name.Value
                     foreach ($ts in $m.Timeseries) {
                         foreach ($pt in $ts.Data) {
-                            foreach ($agg in @("Average", "Maximum")) {
-                                $value = $null
-                                if ($agg -eq "Average" -and $null -ne $pt.Average) { $value = $pt.Average }
-                                if ($agg -eq "Maximum" -and $null -ne $pt.Maximum) { $value = $pt.Maximum }
-                                if ($null -ne $value) {
-                                    $bag.Add([PSCustomObject]@{
-                                        VmId        = $vmId
-                                        Metric      = $mName
-                                        Aggregation = $agg
-                                        TimeStamp   = $pt.TimeStamp
-                                        Value       = $value
-                                    })
-                                }
+                            if ($null -ne $pt.Average) {
+                                $bag.Add([PSCustomObject]@{
+                                    VmId        = $vmId
+                                    Metric      = $mName
+                                    Aggregation = 'Average'
+                                    TimeStamp   = $pt.TimeStamp
+                                    Value       = $pt.Average
+                                })
+                            }
+                            if ($null -ne $pt.Maximum) {
+                                $bag.Add([PSCustomObject]@{
+                                    VmId        = $vmId
+                                    Metric      = $mName
+                                    Aggregation = 'Maximum'
+                                    TimeStamp   = $pt.TimeStamp
+                                    Value       = $pt.Maximum
+                                })
                             }
                         }
                     }
@@ -1297,11 +1394,14 @@ else {
                 $success = $true
             }
             catch {
-                if ($_.Exception.Message -match '429|throttl' -and $attempt -lt $maxAttempts) {
+                $msg = $_.Exception.Message
+                Write-Host "    Get-AzMetric error for ${vmId}: ${msg}" -ForegroundColor Yellow
+                if ($msg -match '429|throttl' -and $attempt -lt $maxAttempts) {
                     $backoff = @(15, 45, 135)[$attempt - 1]
+                    Write-Host "    throttled, backing off ${backoff} seconds" -ForegroundColor Yellow
                     Start-Sleep -Seconds $backoff
                 }
-                # Non-throttle errors or final attempt: skip
+                # Non-throttle errors or final attempt: will retry until attempts exhausted
             }
         }
 
