@@ -275,7 +275,7 @@ function Protect-SubnetId {
     return (Protect-Value -Value $Value -Prefix "Subnet" -Length 6)
 }
 
-function Scrub-KqlRow {
+function Protect-KqlRow {
     param([PSCustomObject]$Row)
     if (-not $ScrubPII) { return $Row }
     foreach ($p in @($Row.PSObject.Properties)) {
@@ -1622,7 +1622,7 @@ else {
             foreach ($r in SafeArray $tdResult) {
                 if ($ScrubPII) {
                     $r.WorkspaceResourceId = Protect-ArmId $r.WorkspaceResourceId
-                    Scrub-KqlRow $r
+                    Protect-KqlRow $r
                 }
                 $laResults.Add($r)
             }
@@ -1687,7 +1687,7 @@ else {
         foreach ($item in $kqlCollected) {
             if ($ScrubPII) {
                 $item.WorkspaceResourceId = Protect-ArmId $item.WorkspaceResourceId
-                Scrub-KqlRow $item
+                Protect-KqlRow $item
             }
             $laResults.Add($item)
         }
