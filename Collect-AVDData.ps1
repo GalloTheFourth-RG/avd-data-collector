@@ -302,27 +302,27 @@ $capacityReservationGroups = [System.Collections.Generic.List[object]]::new()
 $reservedInstances = [System.Collections.Generic.List[object]]::new()
 $quotaUsage = [System.Collections.Generic.List[object]]::new()
 
-# New v2.0 collection containers
-$actualCostData = [System.Collections.Generic.List[object]]::new()
-$vmActualMonthlyCost = @{}
-$infraCostData = [System.Collections.Generic.List[object]]::new()
-$costAccessGranted = [System.Collections.Generic.List[string]]::new()
-$costAccessDenied = [System.Collections.Generic.List[string]]::new()
-$subnetAnalysis = [System.Collections.Generic.List[object]]::new()
-$vnetAnalysis = [System.Collections.Generic.List[object]]::new()
-$privateEndpointFindings = [System.Collections.Generic.List[object]]::new()
-$nsgRuleFindings = [System.Collections.Generic.List[object]]::new()
-$galleryAnalysis = [System.Collections.Generic.List[object]]::new()
-$galleryImageDetails = [System.Collections.Generic.List[object]]::new()
-$marketplaceImageDetails = [System.Collections.Generic.List[object]]::new()
-$fslogixStorageAnalysis = [System.Collections.Generic.List[object]]::new()
-$fslogixShares = [System.Collections.Generic.List[object]]::new()
-$orphanedResources = [System.Collections.Generic.List[object]]::new()
-$diagnosticSettings = [System.Collections.Generic.List[object]]::new()
-$alertRules = [System.Collections.Generic.List[object]]::new()
-$activityLogEntries = [System.Collections.Generic.List[object]]::new()
-$policyAssignments = [System.Collections.Generic.List[object]]::new()
-$resourceTags = [System.Collections.Generic.List[object]]::new()
+# New v2.0 collection containers (script-scoped to satisfy PSScriptAnalyzer — used in Export-PackJson calls)
+$script:actualCostData = [System.Collections.Generic.List[object]]::new()
+$script:vmActualMonthlyCost = @{}
+$script:infraCostData = [System.Collections.Generic.List[object]]::new()
+$script:costAccessGranted = [System.Collections.Generic.List[string]]::new()
+$script:costAccessDenied = [System.Collections.Generic.List[string]]::new()
+$script:subnetAnalysis = [System.Collections.Generic.List[object]]::new()
+$script:vnetAnalysis = [System.Collections.Generic.List[object]]::new()
+$script:privateEndpointFindings = [System.Collections.Generic.List[object]]::new()
+$script:nsgRuleFindings = [System.Collections.Generic.List[object]]::new()
+$script:galleryAnalysis = [System.Collections.Generic.List[object]]::new()
+$script:galleryImageDetails = [System.Collections.Generic.List[object]]::new()
+$script:marketplaceImageDetails = [System.Collections.Generic.List[object]]::new()
+$script:fslogixStorageAnalysis = [System.Collections.Generic.List[object]]::new()
+$script:fslogixShares = [System.Collections.Generic.List[object]]::new()
+$script:orphanedResources = [System.Collections.Generic.List[object]]::new()
+$script:diagnosticSettings = [System.Collections.Generic.List[object]]::new()
+$script:alertRules = [System.Collections.Generic.List[object]]::new()
+$script:activityLogEntries = [System.Collections.Generic.List[object]]::new()
+$script:policyAssignments = [System.Collections.Generic.List[object]]::new()
+$script:resourceTags = [System.Collections.Generic.List[object]]::new()
 
 # Track all AVD resource groups across subscriptions (SubId|RGName → $true)
 $script:avdResourceGroups = @{}
@@ -1328,8 +1328,8 @@ foreach ($subId in $SubscriptionIds) {
                 HasDiskEncryption    = $hasDiskEncryption
                 LicenseType          = $vmLicenseType
                 OSDiskEncryptionType = $osDiskEncryptionType
-                Tags                 = $(if ($ScrubPII) { $null } else { $vm.Tags })
-                TimeCreated          = try { $vm.TimeCreated } catch { $null }
+                Tags                 = $(if ($ScrubPII) { $null } else { SafeProp $vm 'Tags' })
+                TimeCreated          = SafeProp $vm 'TimeCreated'
             })
         }
     }
@@ -1514,29 +1514,29 @@ if ($hasExtendedCollection) {
     if ($IncludeResourceTags) {
         Write-Host "  Collecting resource tags..." -ForegroundColor Gray
         foreach ($v in $vms) {
-            $tags = if ($ScrubPII) { $null } else { $v.Tags }
-            if ($tags) {
+            $tags = SafeProp $v 'Tags'
+            if ($tags -and -not $ScrubPII) {
                 foreach ($key in $tags.PSObject.Properties.Name) {
                     $resourceTags.Add([PSCustomObject]@{
                         ResourceType  = "VirtualMachine"
                         ResourceName  = $v.VMName
                         ResourceGroup = $v.ResourceGroup
                         TagKey        = $key
-                        TagValue      = if ($ScrubPII) { '[SCRUBBED]' } else { $tags.$key }
+                        TagValue      = $tags.$key
                     })
                 }
             }
         }
         foreach ($hp in $hostPools) {
-            $tags = if ($ScrubPII) { $null } else { $hp.Tags }
-            if ($tags) {
+            $tags = SafeProp $hp 'Tags'
+            if ($tags -and -not $ScrubPII) {
                 foreach ($key in $tags.PSObject.Properties.Name) {
                     $resourceTags.Add([PSCustomObject]@{
                         ResourceType  = "HostPool"
                         ResourceName  = $hp.HostPoolName
                         ResourceGroup = $hp.ResourceGroup
                         TagKey        = $key
-                        TagValue      = if ($ScrubPII) { '[SCRUBBED]' } else { $tags.$key }
+                        TagValue      = $tags.$key
                     })
                 }
             }
