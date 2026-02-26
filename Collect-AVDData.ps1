@@ -3186,6 +3186,26 @@ if ($ScrubPII) {
     Get-ChildItem -Path $outFolder -Filter 'diagnostic.log' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
+# ── PII Lookup Key (kept OUTSIDE the pack — never shared with consultant) ──
+if ($ScrubPII -and $script:piiCache.Count -gt 0) {
+    $lookupEntries = [System.Collections.Generic.List[object]]::new()
+    foreach ($entry in $script:piiCache.GetEnumerator()) {
+        $parts = $entry.Key -split ':', 2
+        $lookupEntries.Add([PSCustomObject]@{
+            AnonymizedValue = $entry.Value
+            Category        = $parts[0]
+            OriginalValue   = $parts[1]
+        })
+    }
+    $lookupEntries = $lookupEntries | Sort-Object Category, AnonymizedValue
+    $keyFilePath = "$outFolder-PII-KEY.csv"
+    $lookupEntries | Export-Csv -Path $keyFilePath -NoTypeInformation
+    Write-Host ""
+    Write-Host "  🔑 PII Lookup Key: $keyFilePath" -ForegroundColor Magenta
+    Write-Host "     This file maps anonymized names back to real resource names." -ForegroundColor Gray
+    Write-Host "     KEEP THIS FILE — do NOT send it with the collection pack." -ForegroundColor Yellow
+}
+
 $zipPath = "$outFolder.zip"
 try {
     Compress-Archive -Path $outFolder -DestinationPath $zipPath -Force
@@ -3270,6 +3290,11 @@ if ($IncludeImageAnalysis) {
 }
 if ($ScrubPII) {
     Write-Host "  PII:             Scrubbed (identifiers anonymized)" -ForegroundColor Magenta
+    Write-Host "  PII Key:         $keyFilePath" -ForegroundColor Magenta
+    Write-Host ""
+    Write-Host "  ⚠ IMPORTANT: The PII key file maps anonymized names to real names." -ForegroundColor Yellow
+    Write-Host "    Send ONLY the .zip file to your consultant." -ForegroundColor Yellow
+    Write-Host "    Keep the PII key file to cross-reference findings." -ForegroundColor Yellow
 }
 Write-Host ""
 Write-Host "  Runtime: $([math]::Round($elapsed.TotalMinutes, 1)) minutes" -ForegroundColor Gray
