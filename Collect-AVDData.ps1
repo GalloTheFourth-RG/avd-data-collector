@@ -1741,7 +1741,7 @@ else {
             foreach ($r in SafeArray $tdResult) {
                 if ($ScrubPII) {
                     $r.WorkspaceResourceId = Protect-ArmId $r.WorkspaceResourceId
-                    Protect-KqlRow $r
+                    $null = Protect-KqlRow $r
                 }
                 $laResults.Add($r)
             }
@@ -1811,7 +1811,7 @@ else {
         foreach ($item in $kqlCollected) {
             if ($ScrubPII) {
                 $item.WorkspaceResourceId = Protect-ArmId $item.WorkspaceResourceId
-                Protect-KqlRow $item
+                $null = Protect-KqlRow $item
             }
             $laResults.Add($item)
         }
