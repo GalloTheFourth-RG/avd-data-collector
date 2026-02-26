@@ -1704,14 +1704,14 @@ else {
                     RowCount            = 0
                 })
             }
-            # record query completion and update progress
-            [System.Threading.Interlocked]::Increment($using:laProcessed) | Out-Null
-            try {
-                $pct2 = [math]::Round(($using:laProcessed.Value / $using:laTotal) * 100)
-                Write-Progress -Activity "Running KQL queries" -Status "$($using:laProcessed.Value)/$($using:laTotal) queries" -PercentComplete $pct2
-            } catch { }
-
         } -ThrottleLimit 5
+
+        # increment workspace-based counter and update progress bar
+        $script:laProcessed += $remainingQueries.Count
+        try {
+            $pct2 = [math]::Round(($script:laProcessed / $laTotal) * 100)
+            Write-Progress -Activity "Running KQL queries" -Status "$script:laProcessed/$laTotal queries" -PercentComplete $pct2
+        } catch { }
 
         foreach ($item in $kqlCollected) {
             if ($ScrubPII) {
