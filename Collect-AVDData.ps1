@@ -1543,17 +1543,6 @@ else {
     $queryStart = (Get-Date).AddDays(-$MetricsLookbackDays)
     $queryEnd   = Get-Date
 
-    # progress tracking for queries
-    $laProcessed = [ref]0
-    $remainingQueryCount = ($queryDispatchList | Where-Object { $_.Label -ne "CurrentWindow_TableDiscovery" }).Count
-    $laTotal = (SafeCount $LogAnalyticsWorkspaceResourceIds) * $remainingQueryCount
-
-    # prepare progress monitoring for queries
-    $laProcessed = [ref]0
-    # total queries = workspaces * (queryDispatchList minus discovery)
-    $remainingQueryCount = ($queryDispatchList | Where-Object { $_.Label -ne "CurrentWindow_TableDiscovery" }).Count
-    $laTotal = (SafeCount $LogAnalyticsWorkspaceResourceIds) * $remainingQueryCount
-
 
     # Build query dispatch list
     $queryDispatchList = @(
@@ -1594,6 +1583,11 @@ else {
         @{ Label = "CurrentWindow_CheckpointLoginDecomp";   Query = $kqlQueries["kqlCheckpointLoginDecomposition"] },
         @{ Label = "CurrentWindow_DisconnectHeatmap";       Query = $kqlQueries["kqlDisconnectHeatmap"] }
     ) | Where-Object { $null -ne $_.Query }
+
+    # progress tracking for queries
+    $laProcessed = [ref]0
+    $remainingQueryCount = ($queryDispatchList | Where-Object { $_.Label -ne "CurrentWindow_TableDiscovery" }).Count
+    $laTotal = (SafeCount $LogAnalyticsWorkspaceResourceIds) * $remainingQueryCount
 
     Write-Host "  Dispatching $(SafeCount $queryDispatchList) queries across $(SafeCount $LogAnalyticsWorkspaceResourceIds) workspace(s)" -ForegroundColor Gray
     Write-Host ""
