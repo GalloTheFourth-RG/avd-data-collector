@@ -1381,7 +1381,9 @@ Export-PackJson -FileName 'app-groups.json' -Data $appGroups
 Export-PackJson -FileName 'scaling-plans.json' -Data $scalingPlans
 Export-PackJson -FileName 'scaling-plan-assignments.json' -Data $scalingPlanAssignments
 Export-PackJson -FileName 'scaling-plan-schedules.json' -Data $scalingPlanSchedules
-Export-PackJson -FileName 'capacity-reservation-groups.json' -Data $capacityReservationGroups
+if ($IncludeCapacityReservations) {
+    Export-PackJson -FileName 'capacity-reservation-groups.json' -Data $capacityReservationGroups
+}
 # Save raw VM identifiers for metrics resume (not included in final pack)
 @{ RawVmIds = @($rawVmIds); RawVmNames = @($rawVmNames) } | ConvertTo-Json -Depth 3 -Compress | Out-File -FilePath (Join-Path $outFolder '_raw-vm-ids.json') -Encoding UTF8
 Save-Checkpoint 'step1-arm'
@@ -1620,7 +1622,9 @@ else {
 
     # Save Step 2 checkpoint
     Export-PackJson -FileName 'metrics-baseline.json' -Data $vmMetrics
-    Export-PackJson -FileName 'metrics-incident.json' -Data $vmMetricsIncident
+    if ($IncludeIncidentWindow) {
+        Export-PackJson -FileName 'metrics-incident.json' -Data $vmMetricsIncident
+    }
     Save-Checkpoint 'step2-metrics'
     Write-Host "  [CHECKPOINT] Step 2 saved — safe to resume from: $outFolder" -ForegroundColor DarkGray
     Write-Host ""
@@ -1976,9 +1980,13 @@ Write-Host "  Exporting Collection Pack" -ForegroundColor Cyan
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 Write-Host ""
 
-# Final exports (quota + reserved instances + metadata — other files already saved at checkpoints)
-Export-PackJson -FileName "quota-usage.json" -Data $quotaUsage
-Export-PackJson -FileName "reserved-instances.json" -Data $reservedInstances
+# Final exports (optional data + metadata — other files already saved at checkpoints)
+if ($IncludeQuotaUsage) {
+    Export-PackJson -FileName "quota-usage.json" -Data $quotaUsage
+}
+if ($IncludeReservedInstances) {
+    Export-PackJson -FileName "reserved-instances.json" -Data $reservedInstances
+}
 
 # Metadata
 $metadata = [PSCustomObject]@{
