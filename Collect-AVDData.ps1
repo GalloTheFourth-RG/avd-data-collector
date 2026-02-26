@@ -1621,7 +1621,7 @@ else {
     ) | Where-Object { $null -ne $_.Query }
 
     # progress tracking for queries
-    $laProcessed = [ref]0
+    $script:laProcessed = 0
     $remainingQueryCount = ($queryDispatchList | Where-Object { $_.Label -ne "CurrentWindow_TableDiscovery" }).Count
     $laTotal = (SafeCount $LogAnalyticsWorkspaceResourceIds) * $remainingQueryCount
 
