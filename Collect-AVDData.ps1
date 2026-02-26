@@ -1715,10 +1715,10 @@ else {
             [PSCustomObject]@{ Progress = 1 }
         } -ThrottleLimit $KqlParallel | ForEach-Object {
             # update progress on the main thread
-            $script:laProcessed += $_.Progress
+            $global:laProcessed += $_.Progress
             try {
-                $pct = [math]::Round(($script:laProcessed / $laTotal) * 100)
-                Write-Progress -Activity "Running KQL queries" -Status "$script:laProcessed/$laTotal queries" -PercentComplete $pct
+                $pct = [math]::Round(($global:laProcessed / $laTotal) * 100)
+                Write-Progress -Activity "Running KQL queries" -Status "$global:laProcessed/$laTotal queries" -PercentComplete $pct
             } catch { }
         }
 
