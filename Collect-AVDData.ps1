@@ -405,6 +405,137 @@ if ($IncludeReservedInstances) {
     }
 }
 
+# Optional module: Az.Network (for NIC lookups)
+$azNetModule = Get-Module -ListAvailable -Name 'Az.Network' | Select-Object -First 1
+if ($azNetModule) {
+    Write-Host "  ✓ Found: Az.Network v$($azNetModule.Version)" -ForegroundColor Green
+} else {
+    Write-Host "  ⚠ Az.Network not installed — NIC/IP data will be limited" -ForegroundColor Yellow
+    Write-Host "    Install with: Install-Module -Name Az.Network -Scope CurrentUser -Force" -ForegroundColor Gray
+}
+
+Write-Host ""
+
+# =========================================================
+# Azure Authentication & Subscription Pre-Flight
+# =========================================================
+Write-Host "Validating Azure connection..." -ForegroundColor Cyan
+
+$existingContext = Get-AzContext -ErrorAction SilentlyContinue
+
+if (-not $existingContext -or -not $existingContext.Account) {
+    Write-Host "  No active Azure session found. Logging in..." -ForegroundColor Yellow
+    try {
+        Disable-AzContextAutosave -Scope Process -ErrorAction SilentlyContinue | Out-Null
+        Connect-AzAccount -TenantId $TenantId -ErrorAction Stop | Out-Null
+        $existingContext = Get-AzContext
+    }
+    catch {
+        Write-Host ""
+        Write-Host "  ✗ Azure login failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  Run this command first, then re-run the collector:" -ForegroundColor Yellow
+        Write-Host "    Connect-AzAccount -TenantId '$TenantId'" -ForegroundColor White
+        Write-Host ""
+        exit 1
+    }
+} elseif ($existingContext.Tenant.Id -ne $TenantId) {
+    Write-Host "  ⚠ Current session is for tenant $($existingContext.Tenant.Id) — switching to $TenantId" -ForegroundColor Yellow
+    try {
+        Disable-AzContextAutosave -Scope Process -ErrorAction SilentlyContinue | Out-Null
+        Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
+        Connect-AzAccount -TenantId $TenantId -ErrorAction Stop | Out-Null
+        $existingContext = Get-AzContext
+    }
+    catch {
+        Write-Host "  ✗ Failed to switch tenant: $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
+}
+
+# Validate token is still active
+$tokenValid = $false
+$availableSubs = @()
+try {
+    $availableSubs = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop)
+    $tokenValid = $true
+}
+catch {
+    Write-Host "  ⚠ Session token expired — re-authenticating..." -ForegroundColor Yellow
+    try {
+        Disable-AzContextAutosave -Scope Process -ErrorAction SilentlyContinue | Out-Null
+        Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
+        Connect-AzAccount -TenantId $TenantId -ErrorAction Stop | Out-Null
+        $availableSubs = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop)
+        $tokenValid = $true
+    }
+    catch {
+        Write-Host "  ✗ Authentication failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "    Run: Connect-AzAccount -TenantId '$TenantId'" -ForegroundColor White
+        exit 1
+    }
+}
+
+$isManagedIdentity = $existingContext -and $existingContext.Account.Type -eq 'ManagedService'
+if ($isManagedIdentity) {
+    Write-Host "  ✓ Authenticated via Managed Identity" -ForegroundColor Green
+} else {
+    Write-Host "  ✓ Authenticated as: $($existingContext.Account.Id)" -ForegroundColor Green
+}
+Write-Host "    Tenant: $TenantId" -ForegroundColor Gray
+
+# ── Subscription access pre-flight ──
+Write-Host ""
+Write-Host "Validating subscription access..." -ForegroundColor Cyan
+$availableSubIds = @($availableSubs | ForEach-Object { $_.Id })
+$subsFailed = @()
+foreach ($subId in $SubscriptionIds) {
+    if ($subId -notin $availableSubIds) {
+        $subsFailed += $subId
+        Write-Host "  ✗ Subscription $subId — not accessible with this account" -ForegroundColor Red
+        $closestMatch = $availableSubs | Where-Object { $_.Name -match 'vdi|avd|desktop' -or $_.Id -like "$($subId.Substring(0,8))*" } | Select-Object -First 1
+        if ($closestMatch) {
+            Write-Host "    Did you mean: $($closestMatch.Name) ($($closestMatch.Id))?" -ForegroundColor Yellow
+        }
+    } else {
+        $subMatch = $availableSubs | Where-Object { $_.Id -eq $subId } | Select-Object -First 1
+        $subName = if ($subMatch) { $subMatch.Name } else { $subId }
+        Write-Host "  ✓ $subName ($subId)" -ForegroundColor Green
+    }
+}
+
+if ($subsFailed.Count -eq $SubscriptionIds.Count) {
+    Write-Host ""
+    Write-Host "  ✗ None of the specified subscriptions are accessible." -ForegroundColor Red
+    Write-Host "    Available subscriptions in this tenant:" -ForegroundColor Gray
+    foreach ($s in ($availableSubs | Select-Object -First 10)) {
+        Write-Host "      • $($s.Name) ($($s.Id))" -ForegroundColor Gray
+    }
+    if ($availableSubs.Count -gt 10) { Write-Host "      ... and $($availableSubs.Count - 10) more" -ForegroundColor Gray }
+    Write-Host ""
+    exit 1
+} elseif ($subsFailed.Count -gt 0) {
+    Write-Host ""
+    Write-Host "  ⚠ $($subsFailed.Count) subscription(s) not accessible — they will be skipped" -ForegroundColor Yellow
+}
+
+# ── Log Analytics workspace ID format validation ──
+if ($LogAnalyticsWorkspaceResourceIds.Count -gt 0 -and -not $SkipLogAnalyticsQueries) {
+    Write-Host ""
+    Write-Host "Validating workspace resource IDs..." -ForegroundColor Cyan
+    foreach ($wsId in $LogAnalyticsWorkspaceResourceIds) {
+        $wsParts = ($wsId.TrimEnd('/') -split '/')
+        if ($wsParts.Count -lt 9 -or $wsId -notmatch 'Microsoft\.OperationalInsights/workspaces') {
+            Write-Host "  ⚠ Invalid workspace resource ID format:" -ForegroundColor Yellow
+            Write-Host "    $wsId" -ForegroundColor Gray
+            Write-Host "    Expected: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<name>" -ForegroundColor Gray
+        } else {
+            $wsName = $wsParts[8]
+            Write-Host "  ✓ $wsName" -ForegroundColor Green
+        }
+    }
+}
+
 Write-Host ""
 
 # Raw VM ARM IDs for metrics collection (unaffected by PII scrubbing)
