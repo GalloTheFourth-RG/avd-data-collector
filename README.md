@@ -45,6 +45,14 @@ cd avd-data-collector
     -LogAnalyticsWorkspaceResourceIds @(
         "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<name>"
     )
+
+# Full collection with ALL extended data (cost, network, storage, images, etc.)
+.\Collect-AVDData.ps1 `
+    -TenantId "your-tenant-id" `
+    -SubscriptionIds @("your-sub-id") `
+    -LogAnalyticsWorkspaceResourceIds @("/subscriptions/.../workspaces/<name>") `
+    -IncludeAllExtended `
+    -IncludeReservedInstances
 ```
 
 Output: `AVD-CollectionPack-YYYYMMDD-HHMMSS.zip`
@@ -65,6 +73,16 @@ Output: `AVD-CollectionPack-YYYYMMDD-HHMMSS.zip`
 | **Log Analytics** | 36 KQL queries — connections, errors, profiles, Shortpath, agent health | `Invoke-AzOperationalInsightsQuery` |
 | **Capacity Reservations** | CRG utilization, allocated vs used capacity | ARM REST API |
 | **Quota Usage** | Per-region vCPU quota (current / limit) | `Get-AzVMUsage` |
+| **Reserved Instances** | RI orders, SKUs, terms, expiry, utilization | `Az.Reservations` |
+| **Cost Data** ⁺ | Per-VM and infrastructure costs (last 30 days) | Cost Management API |
+| **Network Topology** ⁺ | Subnets, VNets, NSG rules, private endpoints, NAT Gateway | `Az.Network` + ARM |
+| **Image Analysis** ⁺ | Gallery image versions, marketplace freshness | ARM API |
+| **Storage** ⁺ | FSLogix storage accounts, file shares, capacity | `Az.Storage` |
+| **Orphaned Resources** ⁺ | Unattached disks, unused NICs, unassociated PIPs | ARM |
+| **Diagnostics/Alerts** ⁺ | Diagnostic settings, alert rules, activity log | ARM REST API |
+| **Governance** ⁺ | Policy assignments, resource tags | ARM REST API |
+
+> ⁺ = Extended collection (opt-in via individual flags or `-IncludeAllExtended`)
 
 ---
 
@@ -97,6 +115,7 @@ Add `-ScrubPII` to anonymize VM names, host pool names, usernames, IPs, subscrip
 |-------------|---------|
 | **PowerShell** | 7.2+ (`pwsh.exe`, not `powershell.exe`) |
 | **Az Modules** | `Az.Accounts`, `Az.Compute`, `Az.DesktopVirtualization`, `Az.Monitor`, `Az.OperationalInsights`, `Az.Resources` |
+| **Optional Modules** | `Az.Network` (network topology), `Az.Storage` (storage analysis), `Az.Reservations` (RI collection) |
 | **Azure RBAC** | **Reader** on AVD subscriptions + **Log Analytics Reader** on workspaces |
 
 Install the Az modules if you don't have them:
@@ -132,7 +151,25 @@ Install-Module Az.Accounts, Az.Compute, Az.DesktopVirtualization, Az.Monitor, Az
 | `-MetricsTimeGrainMinutes` | `15` | Aggregation interval (5/15/30/60 min) |
 | `-IncludeCapacityReservations` | `$false` | Collect capacity reservation group data |
 | `-IncludeQuotaUsage` | `$false` | Collect per-region vCPU quota data |
+| `-IncludeReservedInstances` | `$false` | Collect Azure Reserved Instances (requires Az.Reservations) |
 | `-ScrubPII` | `$false` | Anonymize all identifiable data before export |
+
+### Extended Collection (v1.1.0)
+
+Use `-IncludeAllExtended` to enable all of these at once, or pick individually:
+
+| Parameter | Description |
+|-----------|-------------|
+| `-IncludeCostData` | Azure Cost Management per-VM and infrastructure costs (30 days) |
+| `-IncludeNetworkTopology` | VNet/subnet analysis, NSG rules, private endpoints, NAT Gateway |
+| `-IncludeImageAnalysis` | Compute Gallery image versions, marketplace image freshness |
+| `-IncludeStorageAnalysis` | FSLogix storage accounts, file share capacity and quotas |
+| `-IncludeOrphanedResources` | Unattached disks, unused NICs, unassociated public IPs |
+| `-IncludeDiagnosticSettings` | Host pool diagnostic log forwarding configuration |
+| `-IncludeAlertRules` | Azure Monitor metric alerts and scheduled query rules |
+| `-IncludeActivityLog` | Activity Log entries (last 7 days) per AVD resource group |
+| `-IncludePolicyAssignments` | Azure Policy assignments and compliance state |
+| `-IncludeResourceTags` | Tag extraction from VMs, host pools, storage accounts |
 
 ### Incident Window
 
@@ -165,6 +202,7 @@ AVD-CollectionPack-20260225-120000/
 ├── metrics-baseline.json            # Azure Monitor metric datapoints
 ├── metrics-incident.json            # Incident window metrics (if requested)
 ├── la-results.json                  # All KQL query results
+├── diagnostic-readiness.json        # Diagnostic data availability per table group
 ├── scaling-plans.json               # Autoscale plan definitions
 ├── scaling-plan-assignments.json    # Plan-to-pool assignments
 ├── scaling-plan-schedules.json      # Schedule details per plan
@@ -172,7 +210,27 @@ AVD-CollectionPack-20260225-120000/
 ├── vmss.json                        # VM Scale Set configurations
 ├── vmss-instances.json              # VMSS instance details
 ├── capacity-reservation-groups.json # CRG utilization (if requested)
-└── quota-usage.json                 # vCPU quota (if requested)
+├── quota-usage.json                 # vCPU quota (if requested)
+├── reserved-instances.json          # Reserved Instance data (if requested)
+├── actual-cost-data.json            # Per-VM daily costs (extended)
+├── vm-actual-monthly-cost.json      # VM monthly cost lookup (extended)
+├── infra-cost-data.json             # Infrastructure costs per RG (extended)
+├── cost-access.json                 # Cost API access status (extended)
+├── subnet-analysis.json             # Subnet details + NSG coverage (extended)
+├── vnet-analysis.json               # VNet DNS, peering, topology (extended)
+├── private-endpoint-findings.json   # Private endpoint status (extended)
+├── nsg-rule-findings.json           # Risky NSG inbound rules (extended)
+├── orphaned-resources.json          # Unattached disks, unused NICs (extended)
+├── fslogix-storage-analysis.json    # Storage account analysis (extended)
+├── fslogix-shares.json              # File share details (extended)
+├── diagnostic-settings.json         # Host pool diagnostic config (extended)
+├── alert-rules.json                 # Azure Monitor alerts (extended)
+├── activity-log.json                # Activity log entries (extended)
+├── policy-assignments.json          # Azure Policy assignments (extended)
+├── gallery-analysis.json            # Compute Gallery images (extended)
+├── gallery-image-details.json       # Gallery image version details (extended)
+├── marketplace-image-details.json   # Marketplace image data (extended)
+└── resource-tags.json               # Resource tags (extended)
 ```
 
 ---

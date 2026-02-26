@@ -4,12 +4,13 @@ The AVD Data Collector outputs a collection pack — a ZIP archive containing JS
 
 ## Schema Version
 
-Current schema version: **1.1**
+Current schema version: **2.0**
 
 The schema version is recorded in `collection-metadata.json` and used by consumer tools to validate compatibility.
 
 | Schema Version | Collector Version | Notes |
 |---------------|-------------------|-------|
+| 2.0 | 1.1.0 | Extended collection (cost, network, storage, images, governance), diagnostic readiness |
 | 1.1 | 1.0.0 | Initial release, compatible with Enhanced AVD Evidence Pack v4.12.0+ |
 
 ---

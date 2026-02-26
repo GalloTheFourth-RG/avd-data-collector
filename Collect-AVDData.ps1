@@ -13,7 +13,7 @@
 
     The output is compatible with the Enhanced AVD Evidence Pack for offline analysis.
 
-    Version: 1.0.0
+    Version: 1.1.0
 .PARAMETER TenantId
     Azure AD / Entra ID tenant ID
 .PARAMETER SubscriptionIds
@@ -28,6 +28,41 @@
     Days of metrics history to collect (1-30, default: 7)
 .PARAMETER MetricsTimeGrainMinutes
     Metric aggregation interval in minutes (5/15/30/60, default: 15)
+.PARAMETER IncludeCostData
+    Collect Azure Cost Management data (requires Cost Management Reader role).
+    Produces per-VM and infrastructure cost breakdowns for the last 30 days.
+.PARAMETER IncludeNetworkTopology
+    Collect VNet/subnet analysis, NSG rules, NAT Gateway config, and
+    private endpoint status for AVD host pools.
+.PARAMETER IncludeImageAnalysis
+    Collect Azure Compute Gallery image versions and marketplace image
+    currency data for golden image freshness scoring.
+.PARAMETER IncludeStorageAnalysis
+    Collect FSLogix-related storage account and file share data including
+    capacity, quotas, and private endpoint status.
+.PARAMETER IncludeOrphanedResources
+    Scan AVD resource groups for unattached disks, unused NICs, and
+    unassociated public IPs.
+.PARAMETER IncludeDiagnosticSettings
+    Collect diagnostic settings for host pools and workspaces to identify
+    missing or misconfigured log forwarding.
+.PARAMETER IncludeAlertRules
+    Collect Azure Monitor alert rules scoped to AVD resource groups.
+.PARAMETER IncludeActivityLog
+    Collect Activity Log entries (last 7 days) for AVD resource groups
+    showing configuration changes, scaling events, and errors.
+.PARAMETER IncludePolicyAssignments
+    Collect Azure Policy assignments and compliance state for AVD
+    resource groups.
+.PARAMETER IncludeResourceTags
+    Export resource tags for all collected VMs, host pools, and storage
+    accounts for cost allocation and governance analysis.
+.PARAMETER IncludeAllExtended
+    Convenience switch: enables ALL extended collection flags at once
+    (Cost, Network, Image, Storage, Orphaned Resources, Diagnostic Settings,
+    Alert Rules, Activity Log, Policy Assignments, Resource Tags, Quota,
+    Capacity Reservations). Does NOT enable Reserved Instances (requires
+    Az.Reservations + tenant-level role).
 .PARAMETER IncludeCapacityReservations
     Collect capacity reservation group data
 .PARAMETER IncludeReservedInstances
@@ -71,6 +106,17 @@ param(
     [int]$MetricsLookbackDays = 7,
     [ValidateSet(5, 15, 30, 60)]
     [int]$MetricsTimeGrainMinutes = 15,
+    [switch]$IncludeCostData,
+    [switch]$IncludeNetworkTopology,
+    [switch]$IncludeImageAnalysis,
+    [switch]$IncludeStorageAnalysis,
+    [switch]$IncludeOrphanedResources,
+    [switch]$IncludeDiagnosticSettings,
+    [switch]$IncludeAlertRules,
+    [switch]$IncludeActivityLog,
+    [switch]$IncludePolicyAssignments,
+    [switch]$IncludeResourceTags,
+    [switch]$IncludeAllExtended,
     [switch]$IncludeCapacityReservations,
     [switch]$IncludeReservedInstances,
     [switch]$IncludeQuotaUsage,
@@ -85,6 +131,22 @@ param(
     [int]$KqlParallel     = 5,
     [string]$OutputPath = "."
 )  # MetricsParallel and KqlParallel control ForEach-Object throttling (default 15,5)
+
+# ── Expand -IncludeAllExtended ──
+if ($IncludeAllExtended) {
+    $IncludeCostData           = $true
+    $IncludeNetworkTopology    = $true
+    $IncludeImageAnalysis      = $true
+    $IncludeStorageAnalysis    = $true
+    $IncludeOrphanedResources  = $true
+    $IncludeDiagnosticSettings = $true
+    $IncludeAlertRules         = $true
+    $IncludeActivityLog        = $true
+    $IncludePolicyAssignments  = $true
+    $IncludeResourceTags       = $true
+    $IncludeQuotaUsage         = $true
+    $IncludeCapacityReservations = $true
+}
 
 # Initialize script-scoped variables
 $script:currentSubContext = $null
@@ -220,8 +282,8 @@ if (-not (Get-Command Get-SubFromArmId -ErrorAction SilentlyContinue)) {
 $WarningPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$script:ScriptVersion = "1.0.0"
-$script:SchemaVersion = "1.1"
+$script:ScriptVersion = "1.1.0"
+$script:SchemaVersion = "2.0"
 
 # Initialize main collection containers
 $hostPools = [System.Collections.Generic.List[object]]::new()
@@ -239,6 +301,31 @@ $laResults = [System.Collections.Generic.List[object]]::new()
 $capacityReservationGroups = [System.Collections.Generic.List[object]]::new()
 $reservedInstances = [System.Collections.Generic.List[object]]::new()
 $quotaUsage = [System.Collections.Generic.List[object]]::new()
+
+# New v2.0 collection containers
+$actualCostData = [System.Collections.Generic.List[object]]::new()
+$vmActualMonthlyCost = @{}
+$infraCostData = [System.Collections.Generic.List[object]]::new()
+$costAccessGranted = [System.Collections.Generic.List[string]]::new()
+$costAccessDenied = [System.Collections.Generic.List[string]]::new()
+$subnetAnalysis = [System.Collections.Generic.List[object]]::new()
+$vnetAnalysis = [System.Collections.Generic.List[object]]::new()
+$privateEndpointFindings = [System.Collections.Generic.List[object]]::new()
+$nsgRuleFindings = [System.Collections.Generic.List[object]]::new()
+$galleryAnalysis = [System.Collections.Generic.List[object]]::new()
+$galleryImageDetails = [System.Collections.Generic.List[object]]::new()
+$marketplaceImageDetails = [System.Collections.Generic.List[object]]::new()
+$fslogixStorageAnalysis = [System.Collections.Generic.List[object]]::new()
+$fslogixShares = [System.Collections.Generic.List[object]]::new()
+$orphanedResources = [System.Collections.Generic.List[object]]::new()
+$diagnosticSettings = [System.Collections.Generic.List[object]]::new()
+$alertRules = [System.Collections.Generic.List[object]]::new()
+$activityLogEntries = [System.Collections.Generic.List[object]]::new()
+$policyAssignments = [System.Collections.Generic.List[object]]::new()
+$resourceTags = [System.Collections.Generic.List[object]]::new()
+
+# Track all AVD resource groups across subscriptions (SubId|RGName → $true)
+$script:avdResourceGroups = @{}
 
 # Misc helpers / caches
 $vmMetrics = $vmMetrics
@@ -416,13 +503,28 @@ if ($IncludeReservedInstances) {
     }
 }
 
-# Optional module: Az.Network (for NIC lookups)
+# Optional module: Az.Network (for NIC lookups, subnet/VNet/NSG analysis)
+$script:hasAzNetwork = $false
 $azNetModule = Get-Module -ListAvailable -Name 'Az.Network' | Select-Object -First 1
 if ($azNetModule) {
+    $script:hasAzNetwork = $true
     Write-Host "  ✓ Found: Az.Network v$($azNetModule.Version)" -ForegroundColor Green
 } else {
-    Write-Host "  ⚠ Az.Network not installed — NIC/IP data will be limited" -ForegroundColor Yellow
+    Write-Host "  ⚠ Az.Network not installed — NIC/IP data and network topology will be limited" -ForegroundColor Yellow
     Write-Host "    Install with: Install-Module -Name Az.Network -Scope CurrentUser -Force" -ForegroundColor Gray
+}
+
+# Optional module: Az.Storage (for FSLogix storage analysis)
+$script:hasAzStorage = $false
+if ($IncludeStorageAnalysis) {
+    $azStorageModule = Get-Module -ListAvailable -Name 'Az.Storage' | Select-Object -First 1
+    if ($azStorageModule) {
+        $script:hasAzStorage = $true
+        Write-Host "  ✓ Optional: Az.Storage v$($azStorageModule.Version)" -ForegroundColor Green
+    } else {
+        Write-Host "  ⚠ Az.Storage not installed — cannot collect FSLogix storage data" -ForegroundColor Yellow
+        Write-Host "    Install with: Install-Module -Name Az.Storage -Scope CurrentUser -Force" -ForegroundColor Gray
+    }
 }
 
 Write-Host ""
@@ -917,6 +1019,8 @@ foreach ($subId in $SubscriptionIds) {
             if ($rgName -and $rgName -notin $hpResourceGroups) {
                 $hpResourceGroups += $rgName
             }
+            # Track AVD resource groups globally for later extended collection steps
+            if ($rgName) { $script:avdResourceGroups["$subId|$rgName".ToLower()] = $true }
         }
     }
 
@@ -1382,6 +1486,739 @@ Write-Host ""
 Write-Host "  ARM collection complete: $(SafeCount $hostPools) host pools, $(SafeCount $vms) VMs, $(SafeCount $sessionHosts) session hosts" -ForegroundColor Green
 Write-Host ""
 
+# =========================================================
+# STEP 1b: Extended Data Collection (Cost, Network, Storage, etc.)
+# =========================================================
+# Build global AVD resource group map from collected data
+foreach ($v in $vms) {
+    $rawSubId = if ($ScrubPII) { $null } else { $v.SubscriptionId }
+    $rawRg    = if ($ScrubPII) { $null } else { $v.ResourceGroup }
+    if ($rawSubId -and $rawRg) { $script:avdResourceGroups["$rawSubId|$rawRg".ToLower()] = $true }
+}
+# Also ensure host pool RGs are tracked (already done during enumeration, but defensive)
+foreach ($hp in $hostPools) {
+    $hpSubId = if ($ScrubPII) { $null } else { $hp.SubscriptionId }
+    $hpRg    = if ($ScrubPII) { $null } else { $hp.ResourceGroup }
+    if ($hpSubId -and $hpRg) { $script:avdResourceGroups["$hpSubId|$hpRg".ToLower()] = $true }
+}
+
+$hasExtendedCollection = $IncludeCostData -or $IncludeNetworkTopology -or $IncludeStorageAnalysis -or $IncludeOrphanedResources -or $IncludeDiagnosticSettings -or $IncludeAlertRules -or $IncludeActivityLog -or $IncludePolicyAssignments -or $IncludeResourceTags -or $IncludeImageAnalysis
+
+if ($hasExtendedCollection) {
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "  Step 1b: Extended Data Collection" -ForegroundColor Cyan
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host ""
+
+    # ── Resource Tags ──
+    if ($IncludeResourceTags) {
+        Write-Host "  Collecting resource tags..." -ForegroundColor Gray
+        foreach ($v in $vms) {
+            $tags = if ($ScrubPII) { $null } else { $v.Tags }
+            if ($tags) {
+                foreach ($key in $tags.PSObject.Properties.Name) {
+                    $resourceTags.Add([PSCustomObject]@{
+                        ResourceType  = "VirtualMachine"
+                        ResourceName  = $v.VMName
+                        ResourceGroup = $v.ResourceGroup
+                        TagKey        = $key
+                        TagValue      = if ($ScrubPII) { '[SCRUBBED]' } else { $tags.$key }
+                    })
+                }
+            }
+        }
+        foreach ($hp in $hostPools) {
+            $tags = if ($ScrubPII) { $null } else { $hp.Tags }
+            if ($tags) {
+                foreach ($key in $tags.PSObject.Properties.Name) {
+                    $resourceTags.Add([PSCustomObject]@{
+                        ResourceType  = "HostPool"
+                        ResourceName  = $hp.HostPoolName
+                        ResourceGroup = $hp.ResourceGroup
+                        TagKey        = $key
+                        TagValue      = if ($ScrubPII) { '[SCRUBBED]' } else { $tags.$key }
+                    })
+                }
+            }
+        }
+        Write-Host "  ✓ Tags: $(SafeCount $resourceTags) tag entries" -ForegroundColor Green
+    }
+
+    # Iterate per subscription for API-bound collections
+    foreach ($subId in $SubscriptionIds) {
+        if ($subId -in $subsSkipped) { continue }
+
+        # Switch context
+        if ($script:currentSubContext -ne $subId) {
+            try {
+                Invoke-WithRetry { Set-AzContext -SubscriptionId $subId -TenantId $TenantId -ErrorAction Stop | Out-Null }
+                $script:currentSubContext = $subId
+            }
+            catch {
+                Write-Step -Step "Extended" -Message "Cannot switch to $subId — skipping" -Status "Warn"
+                continue
+            }
+        }
+
+        $subAvdRgs = @($script:avdResourceGroups.Keys | Where-Object { $_.StartsWith("$subId|".ToLower()) } | ForEach-Object { ($_ -split '\|', 2)[1] })
+        if ($subAvdRgs.Count -eq 0) { continue }
+
+        Write-Step -Step "Extended" -Message "Subscription $(Protect-SubscriptionId $subId) — $($subAvdRgs.Count) AVD RGs" -Status "Progress"
+
+        # ── Cost Management ──
+        if ($IncludeCostData) {
+            try {
+                Write-Host "    Querying Cost Management..." -ForegroundColor Gray
+                $endDate = (Get-Date).ToString("yyyy-MM-dd")
+                $startDate = (Get-Date).AddDays(-30).ToString("yyyy-MM-dd")
+
+                # Test access first
+                $testBody = @{
+                    type = "Usage"
+                    timeframe = "Custom"
+                    timePeriod = @{ from = $startDate; to = $endDate }
+                    dataset = @{
+                        granularity = "None"
+                        aggregation = @{ totalCost = @{ name = "Cost"; function = "Sum" } }
+                    }
+                } | ConvertTo-Json -Depth 10
+                $testResp = Invoke-AzRestMethod -Path "/subscriptions/$subId/providers/Microsoft.CostManagement/query?api-version=2023-11-01" -Method POST -Payload $testBody -ErrorAction Stop
+                
+                if ($testResp.StatusCode -ne 200) {
+                    $costAccessDenied.Add($subId)
+                    Write-Host "    ⚠ Cost Management access denied (need Cost Management Reader)" -ForegroundColor Yellow
+                } else {
+                    $costAccessGranted.Add($subId)
+
+                    # Per-VM cost query
+                    $costBody = @{
+                        type = "Usage"
+                        timeframe = "Custom"
+                        timePeriod = @{ from = $startDate; to = $endDate }
+                        dataset = @{
+                            granularity = "Daily"
+                            aggregation = @{ totalCost = @{ name = "Cost"; function = "Sum" } }
+                            grouping = @(
+                                @{ type = "Dimension"; name = "ResourceId" },
+                                @{ type = "Dimension"; name = "ResourceType" },
+                                @{ type = "Dimension"; name = "MeterCategory" },
+                                @{ type = "Dimension"; name = "PricingModel" }
+                            )
+                        }
+                    } | ConvertTo-Json -Depth 10
+                    $costPath = "/subscriptions/$subId/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
+                    $costResp = Invoke-AzRestMethod -Path $costPath -Method POST -Payload $costBody -ErrorAction Stop
+
+                    if ($costResp.StatusCode -eq 200) {
+                        $costResult = $costResp.Content | ConvertFrom-Json
+                        foreach ($row in SafeArray $costResult.properties.rows) {
+                            $cost    = [double]$row[0]
+                            $date    = $row[1]
+                            $resId   = [string]$row[2]
+                            $resType = [string]$row[3]
+                            $meter   = [string]$row[4]
+                            $pricing = [string]$row[5]
+
+                            $resName = ($resId -split '/')[-1]
+                            $actualCostData.Add([PSCustomObject]@{
+                                SubscriptionId = Protect-SubscriptionId $subId
+                                ResourceId     = Protect-ArmId $resId
+                                ResourceName   = Protect-VMName $resName
+                                ResourceType   = $resType
+                                MeterCategory  = $meter
+                                PricingModel   = $pricing
+                                Date           = $date
+                                Cost           = $cost
+                                Currency       = "USD"
+                            })
+
+                            # Build per-VM monthly cost lookup
+                            if ($resType -like "*virtualMachines*") {
+                                if (-not $vmActualMonthlyCost.ContainsKey($resName)) { $vmActualMonthlyCost[$resName] = 0 }
+                                $vmActualMonthlyCost[$resName] += $cost
+                            }
+                        }
+
+                        # Handle pagination
+                        $nextLink = SafeProp $costResult.properties 'nextLink'
+                        while ($nextLink) {
+                            $nlResp = Invoke-AzRestMethod -Uri $nextLink -Method GET -ErrorAction Stop
+                            if ($nlResp.StatusCode -eq 200) {
+                                $nlResult = $nlResp.Content | ConvertFrom-Json
+                                foreach ($row in SafeArray $nlResult.properties.rows) {
+                                    $cost    = [double]$row[0]
+                                    $date    = $row[1]
+                                    $resId   = [string]$row[2]
+                                    $resType = [string]$row[3]
+                                    $meter   = [string]$row[4]
+                                    $pricing = [string]$row[5]
+                                    $resName = ($resId -split '/')[-1]
+                                    $actualCostData.Add([PSCustomObject]@{
+                                        SubscriptionId = Protect-SubscriptionId $subId
+                                        ResourceId     = Protect-ArmId $resId
+                                        ResourceName   = Protect-VMName $resName
+                                        ResourceType   = $resType
+                                        MeterCategory  = $meter
+                                        PricingModel   = $pricing
+                                        Date           = $date
+                                        Cost           = $cost
+                                        Currency       = "USD"
+                                    })
+                                    if ($resType -like "*virtualMachines*") {
+                                        if (-not $vmActualMonthlyCost.ContainsKey($resName)) { $vmActualMonthlyCost[$resName] = 0 }
+                                        $vmActualMonthlyCost[$resName] += $cost
+                                    }
+                                }
+                                $nextLink = SafeProp $nlResult.properties 'nextLink'
+                            } else { $nextLink = $null }
+                        }
+                    }
+
+                    # Infrastructure costs — non-VM resources in AVD RGs
+                    foreach ($rgName in $subAvdRgs) {
+                        try {
+                            $infraBody = @{
+                                type = "Usage"
+                                timeframe = "Custom"
+                                timePeriod = @{ from = $startDate; to = $endDate }
+                                dataset = @{
+                                    granularity = "None"
+                                    aggregation = @{ totalCost = @{ name = "Cost"; function = "Sum" } }
+                                    filter = @{
+                                        dimensions = @{ name = "ResourceGroup"; operator = "In"; values = @($rgName) }
+                                    }
+                                    grouping = @(
+                                        @{ type = "Dimension"; name = "ResourceType" },
+                                        @{ type = "Dimension"; name = "MeterCategory" }
+                                    )
+                                }
+                            } | ConvertTo-Json -Depth 10
+                            $infraResp = Invoke-AzRestMethod -Path $costPath -Method POST -Payload $infraBody -ErrorAction Stop
+                            if ($infraResp.StatusCode -eq 200) {
+                                $infraResult = $infraResp.Content | ConvertFrom-Json
+                                foreach ($row in SafeArray $infraResult.properties.rows) {
+                                    $infraCostData.Add([PSCustomObject]@{
+                                        SubscriptionId = Protect-SubscriptionId $subId
+                                        ResourceGroup  = Protect-ResourceGroup $rgName
+                                        ResourceType   = [string]$row[1]
+                                        MeterCategory  = [string]$row[2]
+                                        TotalCost      = [double]$row[0]
+                                        Currency       = "USD"
+                                    })
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+
+                    Write-Host "    ✓ Cost data: $(SafeCount $actualCostData) entries, $(($vmActualMonthlyCost.Keys).Count) VMs with costs" -ForegroundColor Green
+                }
+            }
+            catch {
+                Write-Host "    ⚠ Cost Management query failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+
+        # ── Network Topology ──
+        if ($IncludeNetworkTopology -and $script:hasAzNetwork) {
+            Write-Host "    Collecting network topology..." -ForegroundColor Gray
+            $vnetCache = @{}
+
+            # Subnet analysis — find unique subnets from VM data
+            $subVms = @($vms | Where-Object { -not $ScrubPII -and $_.SubscriptionId -eq $subId })
+            $uniqueSubnets = @{}
+            foreach ($sv in $subVms) {
+                $sId = $sv.SubnetId
+                if ($sId -and -not $uniqueSubnets.ContainsKey($sId)) { $uniqueSubnets[$sId] = @{ VmCount = 0 } }
+                if ($sId) { $uniqueSubnets[$sId].VmCount++ }
+            }
+
+            foreach ($subnetId in $uniqueSubnets.Keys) {
+                try {
+                    # Parse subnet ARM ID
+                    $parts = $subnetId -split '/'
+                    if ($parts.Count -lt 11) { continue }
+                    $vnetRg     = $parts[4]
+                    $vnetName   = $parts[8]
+                    $subnetName = $parts[10]
+                    $vnetKey    = "$vnetRg/$vnetName".ToLower()
+
+                    if (-not $vnetCache.ContainsKey($vnetKey)) {
+                        $vnet = Get-AzVirtualNetwork -ResourceGroupName $vnetRg -Name $vnetName -ErrorAction SilentlyContinue
+                        $vnetCache[$vnetKey] = $vnet
+                    }
+                    $vnet = $vnetCache[$vnetKey]
+                    if (-not $vnet) { continue }
+                    $subnet = $vnet.Subnets | Where-Object { $_.Name -eq $subnetName } | Select-Object -First 1
+                    if (-not $subnet) { continue }
+
+                    $addrPrefix = ($subnet.AddressPrefix | Select-Object -First 1) ?? ""
+                    $cidr = 0
+                    if ($addrPrefix -match '/(\d+)$') { $cidr = [int]$matches[1] }
+                    $totalIps = if ($cidr -gt 0) { [math]::Pow(2, 32 - $cidr) } else { 0 }
+                    $usableIps = [math]::Max(0, $totalIps - 5)  # Azure reserves 5
+                    $usedIps = ($subnet.IpConfigurations.Count) + 0
+                    $availIps = [math]::Max(0, $usableIps - $usedIps)
+                    $usagePct = if ($usableIps -gt 0) { [math]::Round(($usedIps / $usableIps) * 100, 1) } else { 0 }
+
+                    $hasNsg    = [bool]$subnet.NetworkSecurityGroup
+                    $nsgId     = if ($hasNsg) { $subnet.NetworkSecurityGroup.Id } else { "" }
+                    $hasRt     = [bool]$subnet.RouteTable
+                    $rtId      = if ($hasRt) { $subnet.RouteTable.Id } else { "" }
+                    $hasNatGw  = [bool]$subnet.NatGateway
+                    $natGwId   = if ($hasNatGw) { $subnet.NatGateway.Id } else { "" }
+
+                    $subnetAnalysis.Add([PSCustomObject]@{
+                        SubscriptionId = Protect-SubscriptionId $subId
+                        SubnetId       = Protect-SubnetId $subnetId
+                        SubnetName     = Protect-SubnetName $subnetName
+                        VNetName       = Protect-Value -Value $vnetName -Prefix "VNet" -Length 4
+                        AddressPrefix  = $addrPrefix
+                        CIDR           = $cidr
+                        TotalIPs       = [int]$totalIps
+                        UsableIPs      = [int]$usableIps
+                        UsedIPs        = $usedIps
+                        AvailableIPs   = [int]$availIps
+                        UsagePct       = $usagePct
+                        HasNSG         = $hasNsg
+                        NsgId          = Protect-ArmId $nsgId
+                        HasRouteTable  = $hasRt
+                        RouteTableId   = Protect-ArmId $rtId
+                        HasNatGateway  = $hasNatGw
+                        NatGatewayId   = Protect-ArmId $natGwId
+                        SessionHostCount = $uniqueSubnets[$subnetId].VmCount
+                    })
+                }
+                catch { }
+            }
+
+            # VNet DNS and peering analysis
+            foreach ($vnetKey in $vnetCache.Keys) {
+                $vnet = $vnetCache[$vnetKey]
+                if (-not $vnet) { continue }
+                $dnsServers = @($vnet.DhcpOptions.DnsServers)
+                $peerings = @($vnet.VirtualNetworkPeerings)
+                $disconnected = @($peerings | Where-Object { $_.PeeringState -ne 'Connected' })
+                $vnetAnalysis.Add([PSCustomObject]@{
+                    SubscriptionId     = Protect-SubscriptionId $subId
+                    VNetName           = Protect-Value -Value $vnet.Name -Prefix "VNet" -Length 4
+                    Location           = $vnet.Location
+                    AddressSpace       = ($vnet.AddressSpace.AddressPrefixes -join "; ")
+                    DnsServers         = if ($ScrubPII) { "[SCRUBBED]" } else { ($dnsServers -join "; ") }
+                    IsCustomDns        = ($dnsServers.Count -gt 0)
+                    PeeringCount       = $peerings.Count
+                    DisconnectedPeerings = $disconnected.Count
+                    SubnetCount        = $vnet.Subnets.Count
+                })
+            }
+
+            # Private endpoint check per host pool
+            foreach ($hp in $hostPools) {
+                $rawHpId = if (-not $ScrubPII) { $hp.HostPoolId } else { $null }
+                if (-not $rawHpId) { continue }
+                try {
+                    $peConns = @(Get-AzPrivateEndpointConnection -PrivateLinkResourceId $rawHpId -ErrorAction SilentlyContinue)
+                    $privateEndpointFindings.Add([PSCustomObject]@{
+                        HostPoolName     = $hp.HostPoolName
+                        HasPrivateEndpoint = ($peConns.Count -gt 0)
+                        EndpointCount    = $peConns.Count
+                        Status           = if ($peConns.Count -gt 0) { ($peConns[0].PrivateLinkServiceConnectionState.Status ?? "Unknown") } else { "None" }
+                    })
+                }
+                catch { }
+            }
+
+            # NSG rule evaluation
+            $nsgCache = @{}
+            foreach ($sa in $subnetAnalysis) {
+                $rawNsgId = if (-not $ScrubPII) { $sa.NsgId } else { $null }
+                if (-not $rawNsgId -or $rawNsgId -eq '') { continue }
+                if ($nsgCache.ContainsKey($rawNsgId)) { continue }
+                try {
+                    $nsgParts = $rawNsgId -split '/'
+                    $nsgRg   = $nsgParts[4]
+                    $nsgName = $nsgParts[8]
+                    $nsg = Get-AzNetworkSecurityGroup -ResourceGroupName $nsgRg -Name $nsgName -ErrorAction SilentlyContinue
+                    $nsgCache[$rawNsgId] = $nsg
+                    if ($nsg) {
+                        foreach ($rule in $nsg.SecurityRules) {
+                            if ($rule.Direction -eq 'Inbound' -and $rule.Access -eq 'Allow') {
+                                $destPorts = $rule.DestinationPortRange -join ','
+                                $srcAddr   = $rule.SourceAddressPrefix -join ','
+                                $isRisky   = ($destPorts -eq '*' -or $destPorts -match '3389|22') -and ($srcAddr -eq '*' -or $srcAddr -eq 'Internet')
+                                if ($isRisky) {
+                                    $nsgRuleFindings.Add([PSCustomObject]@{
+                                        NsgName            = Protect-Value -Value $nsgName -Prefix "NSG" -Length 4
+                                        RuleName           = $rule.Name
+                                        Direction          = $rule.Direction
+                                        Access             = $rule.Access
+                                        Priority           = $rule.Priority
+                                        DestinationPorts   = $destPorts
+                                        SourceAddress      = if ($ScrubPII) { '[SCRUBBED]' } else { $srcAddr }
+                                        Risk               = if ($destPorts -eq '*') { 'Critical' } else { 'High' }
+                                    })
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            Write-Host "    ✓ Network: $(SafeCount $subnetAnalysis) subnets, $(SafeCount $vnetAnalysis) VNets, $(SafeCount $privateEndpointFindings) PE checks, $(SafeCount $nsgRuleFindings) risky NSG rules" -ForegroundColor Green
+        }
+
+        # ── Orphaned Resources ──
+        if ($IncludeOrphanedResources) {
+            Write-Host "    Scanning for orphaned resources..." -ForegroundColor Gray
+            foreach ($rgName in $subAvdRgs) {
+                try {
+                    # Unattached disks
+                    $disks = @(Get-AzDisk -ResourceGroupName $rgName -ErrorAction SilentlyContinue)
+                    foreach ($disk in $disks) {
+                        if ($disk.DiskState -eq "Unattached") {
+                            $diskSizeGB = $disk.DiskSizeGB
+                            $estCost = [math]::Round($diskSizeGB * 0.04, 2) # rough estimate
+                            $orphanedResources.Add([PSCustomObject]@{
+                                SubscriptionId  = Protect-SubscriptionId $subId
+                                ResourceType    = "ManagedDisk"
+                                ResourceName    = Protect-Value -Value $disk.Name -Prefix "Disk" -Length 4
+                                ResourceGroup   = Protect-ResourceGroup $rgName
+                                Details         = "Unattached $($disk.Sku.Name) disk, $($diskSizeGB) GB"
+                                EstMonthlyCost  = $estCost
+                                CreatedDate     = $disk.TimeCreated
+                            })
+                        }
+                    }
+                    # Unattached NICs
+                    if ($script:hasAzNetwork) {
+                        $nics = @(Get-AzNetworkInterface -ResourceGroupName $rgName -ErrorAction SilentlyContinue)
+                        foreach ($nic in $nics) {
+                            if (-not $nic.VirtualMachine -and -not $nic.PrivateEndpoint) {
+                                $orphanedResources.Add([PSCustomObject]@{
+                                    SubscriptionId  = Protect-SubscriptionId $subId
+                                    ResourceType    = "NetworkInterface"
+                                    ResourceName    = Protect-Value -Value $nic.Name -Prefix "NIC" -Length 4
+                                    ResourceGroup   = Protect-ResourceGroup $rgName
+                                    Details         = "Unattached NIC (no VM or private endpoint)"
+                                    EstMonthlyCost  = 0
+                                    CreatedDate     = $null
+                                })
+                            }
+                        }
+                        # Unassociated PIPs
+                        $pips = @(Get-AzPublicIpAddress -ResourceGroupName $rgName -ErrorAction SilentlyContinue)
+                        foreach ($pip in $pips) {
+                            if (-not $pip.IpConfiguration) {
+                                $orphanedResources.Add([PSCustomObject]@{
+                                    SubscriptionId  = Protect-SubscriptionId $subId
+                                    ResourceType    = "PublicIP"
+                                    ResourceName    = Protect-Value -Value $pip.Name -Prefix "PIP" -Length 4
+                                    ResourceGroup   = Protect-ResourceGroup $rgName
+                                    Details         = "Unassociated PIP ($($pip.Sku.Name), $($pip.PublicIpAllocationMethod))"
+                                    EstMonthlyCost  = if ($pip.Sku.Name -eq "Standard") { 3.65 } else { 0 }
+                                    CreatedDate     = $null
+                                })
+                            }
+                        }
+                    }
+                }
+                catch {
+                    Write-Step -Step "Orphaned" -Message "Failed for $rgName — $($_.Exception.Message)" -Status "Warn"
+                }
+            }
+            Write-Host "    ✓ Orphaned resources: $(SafeCount $orphanedResources) found" -ForegroundColor Green
+        }
+
+        # ── FSLogix Storage Analysis ──
+        if ($IncludeStorageAnalysis -and $script:hasAzStorage) {
+            Write-Host "    Collecting storage data..." -ForegroundColor Gray
+            foreach ($rgName in $subAvdRgs) {
+                try {
+                    $storageAccounts = @(Get-AzStorageAccount -ResourceGroupName $rgName -ErrorAction SilentlyContinue)
+                    foreach ($sa in $storageAccounts) {
+                        try {
+                            $ctx = $sa.Context
+                            $shares = @(Get-AzStorageShare -Context $ctx -ErrorAction SilentlyContinue)
+                            foreach ($share in $shares) {
+                                $shareName = $share.Name
+                                $usedBytes = 0
+                                try {
+                                    $shareUsage = Get-AzRmStorageShare -StorageAccount $sa -Name $shareName -GetShareUsage -ErrorAction SilentlyContinue
+                                    $usedBytes = if ($shareUsage.ShareUsageBytes) { $shareUsage.ShareUsageBytes } else { 0 }
+                                }
+                                catch { }
+
+                                $quotaGB = $share.ShareProperties.QuotaInGiB
+                                $usedGB = [math]::Round($usedBytes / 1GB, 2)
+                                $usagePct = if ($quotaGB -gt 0) { [math]::Round(($usedGB / $quotaGB) * 100, 1) } else { 0 }
+
+                                # Check for private endpoints
+                                $hasPE = $false
+                                try {
+                                    $peConns = @(Get-AzPrivateEndpointConnection -PrivateLinkResourceId $sa.Id -ErrorAction SilentlyContinue)
+                                    $hasPE = ($peConns.Count -gt 0)
+                                }
+                                catch { }
+
+                                $isFslogix = $shareName -match 'fslogix|profile|odfc|msix'
+
+                                $entry = [PSCustomObject]@{
+                                    SubscriptionId     = Protect-SubscriptionId $subId
+                                    ResourceGroup      = Protect-ResourceGroup $rgName
+                                    StorageAccountName = Protect-StorageAccountName $sa.StorageAccountName
+                                    ShareName          = if ($ScrubPII) { Protect-Value -Value $shareName -Prefix "Share" -Length 4 } else { $shareName }
+                                    SkuName            = $sa.Sku.Name
+                                    Kind               = $sa.Kind
+                                    AccessTier         = $sa.AccessTier
+                                    QuotaGB            = $quotaGB
+                                    UsedGB             = $usedGB
+                                    UsagePct           = $usagePct
+                                    HasPrivateEndpoint = $hasPE
+                                    IsFslogix          = $isFslogix
+                                    LargeFileShares    = ($sa.LargeFileSharesState -eq "Enabled")
+                                    Location           = $sa.PrimaryLocation
+                                }
+
+                                $fslogixStorageAnalysis.Add($entry)
+                                if ($isFslogix) { $fslogixShares.Add($entry) }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch {
+                    Write-Step -Step "Storage" -Message "Failed for $rgName — $($_.Exception.Message)" -Status "Warn"
+                }
+            }
+            Write-Host "    ✓ Storage: $(SafeCount $fslogixStorageAnalysis) shares ($(SafeCount $fslogixShares) FSLogix)" -ForegroundColor Green
+        }
+
+        # ── Diagnostic Settings ──
+        if ($IncludeDiagnosticSettings) {
+            Write-Host "    Collecting diagnostic settings..." -ForegroundColor Gray
+            # Check host pools
+            foreach ($hp in $hostPools) {
+                $rawHpId = if (-not $ScrubPII) { $hp.HostPoolId } else { $null }
+                if (-not $rawHpId) { continue }
+                try {
+                    $diagUri = "${rawHpId}/providers/Microsoft.Insights/diagnosticSettings?api-version=2021-05-01-preview"
+                    $diagResp = Invoke-AzRestMethod -Path $diagUri -Method GET -ErrorAction SilentlyContinue
+                    $diagCount = 0
+                    $workspaceTargets = @()
+                    if ($diagResp.StatusCode -eq 200) {
+                        $diagResult = ($diagResp.Content | ConvertFrom-Json).value
+                        $diagCount = @($diagResult).Count
+                        $workspaceTargets = @($diagResult | ForEach-Object {
+                            if ($_.properties.workspaceId) { Protect-ArmId $_.properties.workspaceId }
+                        } | Where-Object { $_ })
+                    }
+                    $diagnosticSettings.Add([PSCustomObject]@{
+                        ResourceType    = "HostPool"
+                        ResourceName    = $hp.HostPoolName
+                        ResourceId      = Protect-ArmId $rawHpId
+                        SettingsCount   = $diagCount
+                        HasDiagnostics  = ($diagCount -gt 0)
+                        WorkspaceTargets = ($workspaceTargets -join "; ")
+                    })
+                }
+                catch { }
+            }
+            Write-Host "    ✓ Diagnostic settings: $(SafeCount $diagnosticSettings) resources checked" -ForegroundColor Green
+        }
+
+        # ── Alert Rules ──
+        if ($IncludeAlertRules) {
+            Write-Host "    Collecting alert rules..." -ForegroundColor Gray
+            foreach ($rgName in $subAvdRgs) {
+                try {
+                    $alertUri = "/subscriptions/$subId/resourceGroups/$rgName/providers/Microsoft.Insights/metricAlerts?api-version=2018-03-01"
+                    $alertResp = Invoke-AzRestMethod -Path $alertUri -Method GET -ErrorAction SilentlyContinue
+                    if ($alertResp.StatusCode -eq 200) {
+                        $alertResult = ($alertResp.Content | ConvertFrom-Json).value
+                        foreach ($alert in SafeArray $alertResult) {
+                            $alertRules.Add([PSCustomObject]@{
+                                SubscriptionId = Protect-SubscriptionId $subId
+                                ResourceGroup  = Protect-ResourceGroup $rgName
+                                AlertName      = $alert.name
+                                Severity       = SafeProp $alert.properties 'severity'
+                                Enabled        = SafeProp $alert.properties 'enabled'
+                                Description    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $alert.properties 'description' }
+                                TargetType     = ($alert.properties.scopes | ForEach-Object { ($_ -split '/')[-2] } | Select-Object -First 1)
+                            })
+                        }
+                    }
+                    # Also check scheduled query rules (log alerts)
+                    $sqrUri = "/subscriptions/$subId/resourceGroups/$rgName/providers/Microsoft.Insights/scheduledQueryRules?api-version=2023-03-15-preview"
+                    $sqrResp = Invoke-AzRestMethod -Path $sqrUri -Method GET -ErrorAction SilentlyContinue
+                    if ($sqrResp.StatusCode -eq 200) {
+                        $sqrResult = ($sqrResp.Content | ConvertFrom-Json).value
+                        foreach ($sqr in SafeArray $sqrResult) {
+                            $alertRules.Add([PSCustomObject]@{
+                                SubscriptionId = Protect-SubscriptionId $subId
+                                ResourceGroup  = Protect-ResourceGroup $rgName
+                                AlertName      = $sqr.name
+                                Severity       = SafeProp $sqr.properties 'severity'
+                                Enabled        = SafeProp $sqr.properties 'enabled'
+                                Description    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $sqr.properties 'description' }
+                                TargetType     = "ScheduledQueryRule"
+                            })
+                        }
+                    }
+                }
+                catch { }
+            }
+            Write-Host "    ✓ Alert rules: $(SafeCount $alertRules) found" -ForegroundColor Green
+        }
+
+        # ── Activity Log ──
+        if ($IncludeActivityLog) {
+            Write-Host "    Collecting activity log (last 7 days)..." -ForegroundColor Gray
+            $actStart = (Get-Date).AddDays(-7)
+            foreach ($rgName in $subAvdRgs) {
+                try {
+                    $logs = Get-AzActivityLog -ResourceGroupName $rgName -StartTime $actStart -ErrorAction SilentlyContinue -MaxRecord 200
+                    foreach ($log in SafeArray $logs) {
+                        $activityLogEntries.Add([PSCustomObject]@{
+                            SubscriptionId  = Protect-SubscriptionId $subId
+                            ResourceGroup   = Protect-ResourceGroup $rgName
+                            Timestamp       = $log.EventTimestamp
+                            Category        = SafeProp $log 'Category'
+                            OperationName   = SafeProp $log 'OperationName'
+                            Status          = SafeProp $log.Status 'Value'
+                            Level           = SafeProp $log 'Level'
+                            Caller          = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $log 'Caller' }
+                            ResourceId      = Protect-ArmId (SafeProp $log 'ResourceId')
+                            Description     = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $log.Properties 'statusMessage' }
+                        })
+                    }
+                }
+                catch {
+                    Write-Step -Step "Activity Log" -Message "Failed for $rgName — $($_.Exception.Message)" -Status "Warn"
+                }
+            }
+            Write-Host "    ✓ Activity log: $(SafeCount $activityLogEntries) entries" -ForegroundColor Green
+        }
+
+        # ── Policy Assignments ──
+        if ($IncludePolicyAssignments) {
+            Write-Host "    Collecting policy assignments..." -ForegroundColor Gray
+            foreach ($rgName in $subAvdRgs) {
+                try {
+                    $policyUri = "/subscriptions/$subId/resourceGroups/$rgName/providers/Microsoft.Authorization/policyAssignments?api-version=2022-06-01"
+                    $policyResp = Invoke-AzRestMethod -Path $policyUri -Method GET -ErrorAction SilentlyContinue
+                    if ($policyResp.StatusCode -eq 200) {
+                        $policyResult = ($policyResp.Content | ConvertFrom-Json).value
+                        foreach ($pa in SafeArray $policyResult) {
+                            $policyAssignments.Add([PSCustomObject]@{
+                                SubscriptionId    = Protect-SubscriptionId $subId
+                                ResourceGroup     = Protect-ResourceGroup $rgName
+                                AssignmentName    = $pa.name
+                                DisplayName       = SafeProp $pa.properties 'displayName'
+                                PolicyDefId       = SafeProp $pa.properties 'policyDefinitionId'
+                                EnforcementMode   = SafeProp $pa.properties 'enforcementMode'
+                                Scope             = Protect-ArmId (SafeProp $pa.properties 'scope')
+                            })
+                        }
+                    }
+                }
+                catch { }
+            }
+            Write-Host "    ✓ Policy assignments: $(SafeCount $policyAssignments) found" -ForegroundColor Green
+        }
+    } # end per-subscription extended collection
+
+    # ── Image Analysis (post-loop, uses collected VM data) ──
+    if ($IncludeImageAnalysis) {
+        Write-Host "  Collecting image version data..." -ForegroundColor Gray
+        
+        # Marketplace image freshness check
+        $marketplaceSkus = @{}
+        foreach ($v in $vms) {
+            if ($v.ImageSource -eq 'Marketplace' -and $v.ImagePublisher -and $v.ImageOffer -and $v.ImageSku) {
+                $key = "$($v.ImagePublisher)|$($v.ImageOffer)|$($v.ImageSku)"
+                if (-not $marketplaceSkus.ContainsKey($key)) {
+                    $marketplaceSkus[$key] = @{ Publisher = $v.ImagePublisher; Offer = $v.ImageOffer; Sku = $v.ImageSku; Count = 0 }
+                }
+                $marketplaceSkus[$key].Count++
+            }
+        }
+
+        foreach ($key in $marketplaceSkus.Keys) {
+            $info = $marketplaceSkus[$key]
+            try {
+                $queryLocation = ($vms | Where-Object { $_.ImagePublisher -eq $info.Publisher -and $_.ImageOffer -eq $info.Offer } | Select-Object -First 1).Region
+                if (-not $queryLocation) { $queryLocation = "eastus" }
+                $latestImages = @(Get-AzVMImage -Location $queryLocation -PublisherName $info.Publisher -Offer $info.Offer -Skus $info.Sku -ErrorAction SilentlyContinue | Sort-Object -Property Version -Descending | Select-Object -First 5)
+                $latestVersion = if ($latestImages.Count -gt 0) { $latestImages[0].Version } else { "Unknown" }
+                $marketplaceImageDetails.Add([PSCustomObject]@{
+                    Publisher      = $info.Publisher
+                    Offer          = $info.Offer
+                    Sku            = $info.Sku
+                    LatestVersion  = $latestVersion
+                    VersionCount   = $latestImages.Count
+                    VMCount        = $info.Count
+                })
+            }
+            catch { }
+        }
+
+        # Gallery image analysis
+        $galleryImages = @{}
+        foreach ($v in $vms) {
+            if ($v.ImageSource -eq 'Gallery' -and $v.ImageId) {
+                $rawImgId = if (-not $ScrubPII) { $v.ImageId } else { $null }
+                if (-not $rawImgId) { continue }
+                # Gallery image ID format: /subscriptions/.../galleries/xxx/images/yyy/versions/zzz
+                $imgParts = $rawImgId -split '/'
+                if ($imgParts.Count -ge 13) {
+                    $galleryRg      = $imgParts[4]
+                    $galleryName    = $imgParts[8]
+                    $imgDefName     = $imgParts[10]
+                    $galleryKey = "$galleryRg|$galleryName|$imgDefName"
+                    if (-not $galleryImages.ContainsKey($galleryKey)) {
+                        $galleryImages[$galleryKey] = @{ RG = $galleryRg; Gallery = $galleryName; ImageDef = $imgDefName; Count = 0 }
+                    }
+                    $galleryImages[$galleryKey].Count++
+                }
+            }
+        }
+
+        foreach ($key in $galleryImages.Keys) {
+            $info = $galleryImages[$key]
+            try {
+                $versions = @(Get-AzGalleryImageVersion -ResourceGroupName $info.RG -GalleryName $info.Gallery -GalleryImageDefinitionName $info.ImageDef -ErrorAction SilentlyContinue)
+                foreach ($ver in $versions) {
+                    $galleryImageDetails.Add([PSCustomObject]@{
+                        GalleryName = Protect-Value -Value $info.Gallery -Prefix "Gallery" -Length 4
+                        ImageName   = Protect-Value -Value $info.ImageDef -Prefix "Image" -Length 4
+                        Version     = $ver.Name
+                        Location    = $ver.Location
+                        ProvState   = SafeProp $ver 'ProvisioningState'
+                        CreatedDate = SafeProp $ver 'PublishedDate'
+                        EndOfLife   = SafeProp $ver 'EndOfLifeDate'
+                        ReplicaCount = @(SafeProp $ver.PublishingProfile 'TargetRegions').Count
+                    })
+                }
+                $galleryAnalysis.Add([PSCustomObject]@{
+                    GalleryName    = Protect-Value -Value $info.Gallery -Prefix "Gallery" -Length 4
+                    ImageName      = Protect-Value -Value $info.ImageDef -Prefix "Image" -Length 4
+                    VersionCount   = $versions.Count
+                    LatestVersion  = if ($versions.Count -gt 0) { ($versions | Sort-Object -Property Name -Descending | Select-Object -First 1).Name } else { "None" }
+                    VMCount        = $info.Count
+                })
+            }
+            catch { }
+        }
+
+        Write-Host "  ✓ Images: $(SafeCount $marketplaceImageDetails) marketplace SKUs, $(SafeCount $galleryAnalysis) gallery images" -ForegroundColor Green
+    }
+
+    Write-Host ""
+    Write-Host "  Extended collection complete" -ForegroundColor Green
+    Write-Host ""
+} # end hasExtendedCollection
+
 # Save Step 1 checkpoint + incremental data
 Export-PackJson -FileName 'host-pools.json' -Data $hostPools
 Export-PackJson -FileName 'session-hosts.json' -Data $sessionHosts
@@ -1843,6 +2680,41 @@ else {
     Save-Checkpoint 'step3-kql'
     Write-Host "  [CHECKPOINT] Step 3 saved — safe to resume from: $outFolder" -ForegroundColor DarkGray
     Write-Host ""
+
+    # ── Build Diagnostic Readiness from TableDiscovery ──
+    # Mirrors the EP's diagnostic readiness structure so the report can show data prerequisites
+    $diagnosticReadiness = [System.Collections.Generic.List[object]]::new()
+    $discoveredTables = @($laResults | Where-Object { $_.Label -eq "CurrentWindow_TableDiscovery" -and $_.QueryName -eq "AVD" -and $_.PSObject.Properties.Name -contains "Type" })
+    
+    if ($discoveredTables.Count -gt 0) {
+        $tableNames = @($discoveredTables | ForEach-Object { $_.Type })
+        $diagnosticGroups = @(
+            @{ Name = "AVD Connections";      Tables = @("WVDConnections");                   Required = $true;  Purpose = "Login times, disconnect reasons, connection quality, Shortpath analysis" }
+            @{ Name = "AVD Network Data";     Tables = @("WVDConnectionNetworkData");         Required = $true;  Purpose = "RTT latency, bandwidth, connection quality by region" }
+            @{ Name = "AVD Errors";           Tables = @("WVDErrors");                        Required = $true;  Purpose = "Connection error codes, failure root cause analysis" }
+            @{ Name = "AVD Autoscale";        Tables = @("WVDAutoscaleEvaluationPooled");     Required = $false; Purpose = "Scaling plan activity, scale-out/in events, failure tracking" }
+            @{ Name = "Performance Counters"; Tables = @("Perf");                             Required = $false; Purpose = "Per-process CPU/memory, CPU percentiles, disconnect-CPU correlation" }
+            @{ Name = "AVD Agent Health";     Tables = @("WVDAgentHealthStatus");             Required = $false; Purpose = "Session host agent health checks and version monitoring" }
+            @{ Name = "FSLogix Events";       Tables = @("Event");                            Required = $false; Purpose = "FSLogix profile container attach/detach events, error codes" }
+            @{ Name = "Multi-Link Transport"; Tables = @("WVDMultiLinkAdd");                  Required = $false; Purpose = "Actual transport negotiation: DIRECT/STUN/TURN/WEBSOCKET per connection" }
+            @{ Name = "Connection Checkpoints"; Tables = @("WVDCheckpoints");                 Required = $false; Purpose = "Login time decomposition: brokering, auth, transport, logon, shell phases" }
+        )
+        foreach ($dg in $diagnosticGroups) {
+            $found = @($dg.Tables | Where-Object { $_ -in $tableNames })
+            $diagnosticReadiness.Add([PSCustomObject]@{
+                Group     = $dg.Name
+                Tables    = $dg.Tables -join ", "
+                Available = ($found.Count -eq $dg.Tables.Count)
+                Required  = $dg.Required
+                Purpose   = $dg.Purpose
+            })
+        }
+        Export-PackJson -FileName 'diagnostic-readiness.json' -Data $diagnosticReadiness
+        $readyCount = @($diagnosticReadiness | Where-Object { $_.Available }).Count
+        $totalCount = $diagnosticReadiness.Count
+        Write-Host "  ✓ Diagnostic readiness: $readyCount/$totalCount data groups available" -ForegroundColor Green
+        Write-Host ""
+    }
 }
 
 # =========================================================
@@ -1999,6 +2871,80 @@ if ($IncludeReservedInstances) {
     Export-PackJson -FileName "reserved-instances.json" -Data $reservedInstances
 }
 
+# Extended data exports
+if ($IncludeResourceTags -and (SafeCount $resourceTags) -gt 0) {
+    Export-PackJson -FileName "resource-tags.json" -Data $resourceTags
+}
+if ($IncludeCostData) {
+    if ((SafeCount $actualCostData) -gt 0) {
+        Export-PackJson -FileName "actual-cost-data.json" -Data $actualCostData
+    }
+    if (($vmActualMonthlyCost.Keys).Count -gt 0) {
+        # Convert hashtable to list for JSON serialization
+        $vmCostList = [System.Collections.Generic.List[object]]::new()
+        foreach ($key in $vmActualMonthlyCost.Keys) {
+            $vmCostList.Add([PSCustomObject]@{ VMName = $key; MonthlyCost = $vmActualMonthlyCost[$key] })
+        }
+        Export-PackJson -FileName "vm-actual-monthly-cost.json" -Data $vmCostList
+    }
+    if ((SafeCount $infraCostData) -gt 0) {
+        Export-PackJson -FileName "infra-cost-data.json" -Data $infraCostData
+    }
+    # Export cost access status
+    Export-PackJson -FileName "cost-access.json" -Data ([PSCustomObject]@{
+        Granted = @($costAccessGranted)
+        Denied  = @($costAccessDenied)
+    })
+}
+if ($IncludeNetworkTopology) {
+    if ((SafeCount $subnetAnalysis) -gt 0) {
+        Export-PackJson -FileName "subnet-analysis.json" -Data $subnetAnalysis
+    }
+    if ((SafeCount $vnetAnalysis) -gt 0) {
+        Export-PackJson -FileName "vnet-analysis.json" -Data $vnetAnalysis
+    }
+    if ((SafeCount $privateEndpointFindings) -gt 0) {
+        Export-PackJson -FileName "private-endpoint-findings.json" -Data $privateEndpointFindings
+    }
+    if ((SafeCount $nsgRuleFindings) -gt 0) {
+        Export-PackJson -FileName "nsg-rule-findings.json" -Data $nsgRuleFindings
+    }
+}
+if ($IncludeOrphanedResources -and (SafeCount $orphanedResources) -gt 0) {
+    Export-PackJson -FileName "orphaned-resources.json" -Data $orphanedResources
+}
+if ($IncludeStorageAnalysis) {
+    if ((SafeCount $fslogixStorageAnalysis) -gt 0) {
+        Export-PackJson -FileName "fslogix-storage-analysis.json" -Data $fslogixStorageAnalysis
+    }
+    if ((SafeCount $fslogixShares) -gt 0) {
+        Export-PackJson -FileName "fslogix-shares.json" -Data $fslogixShares
+    }
+}
+if ($IncludeDiagnosticSettings -and (SafeCount $diagnosticSettings) -gt 0) {
+    Export-PackJson -FileName "diagnostic-settings.json" -Data $diagnosticSettings
+}
+if ($IncludeAlertRules -and (SafeCount $alertRules) -gt 0) {
+    Export-PackJson -FileName "alert-rules.json" -Data $alertRules
+}
+if ($IncludeActivityLog -and (SafeCount $activityLogEntries) -gt 0) {
+    Export-PackJson -FileName "activity-log.json" -Data $activityLogEntries
+}
+if ($IncludePolicyAssignments -and (SafeCount $policyAssignments) -gt 0) {
+    Export-PackJson -FileName "policy-assignments.json" -Data $policyAssignments
+}
+if ($IncludeImageAnalysis) {
+    if ((SafeCount $galleryAnalysis) -gt 0) {
+        Export-PackJson -FileName "gallery-analysis.json" -Data $galleryAnalysis
+    }
+    if ((SafeCount $galleryImageDetails) -gt 0) {
+        Export-PackJson -FileName "gallery-image-details.json" -Data $galleryImageDetails
+    }
+    if ((SafeCount $marketplaceImageDetails) -gt 0) {
+        Export-PackJson -FileName "marketplace-image-details.json" -Data $marketplaceImageDetails
+    }
+}
+
 # Metadata
 $metadata = [PSCustomObject]@{
     SchemaVersion            = $script:SchemaVersion
@@ -2010,18 +2956,46 @@ $metadata = [PSCustomObject]@{
     IncidentWindowQueried    = [bool]$IncludeIncidentWindow
     SkipAzureMonitorMetrics  = [bool]$SkipAzureMonitorMetrics
     SkipLogAnalyticsQueries  = [bool]$SkipLogAnalyticsQueries
-    SkipActualCosts          = $true  # This collector doesn't collect cost data
+    SkipActualCosts          = -not [bool]$IncludeCostData
     PIIScrubbed              = [bool]$ScrubPII
+    ExtendedCollections      = [PSCustomObject]@{
+        CostData            = [bool]$IncludeCostData
+        NetworkTopology     = [bool]$IncludeNetworkTopology
+        ImageAnalysis       = [bool]$IncludeImageAnalysis
+        StorageAnalysis     = [bool]$IncludeStorageAnalysis
+        OrphanedResources   = [bool]$IncludeOrphanedResources
+        DiagnosticSettings  = [bool]$IncludeDiagnosticSettings
+        AlertRules          = [bool]$IncludeAlertRules
+        ActivityLog         = [bool]$IncludeActivityLog
+        PolicyAssignments   = [bool]$IncludePolicyAssignments
+        ResourceTags        = [bool]$IncludeResourceTags
+    }
     Counts                   = [PSCustomObject]@{
-        HostPools    = SafeCount $hostPools
-        SessionHosts = SafeCount $sessionHosts
-        VMs          = SafeCount $vms
-        VMSS         = SafeCount $vmss
-        Metrics      = SafeCount $vmMetrics
-        KQLResults   = SafeCount $laResults
-        AppGroups    = SafeCount $appGroups
-        ScalingPlans = SafeCount $scalingPlans
-        ReservedInstances = SafeCount $reservedInstances
+        HostPools             = SafeCount $hostPools
+        SessionHosts          = SafeCount $sessionHosts
+        VMs                   = SafeCount $vms
+        VMSS                  = SafeCount $vmss
+        Metrics               = SafeCount $vmMetrics
+        KQLResults            = SafeCount $laResults
+        AppGroups             = SafeCount $appGroups
+        ScalingPlans          = SafeCount $scalingPlans
+        ReservedInstances     = SafeCount $reservedInstances
+        QuotaEntries          = SafeCount $quotaUsage
+        ResourceTags          = SafeCount $resourceTags
+        CostEntries           = SafeCount $actualCostData
+        VMsWithCosts          = ($vmActualMonthlyCost.Keys).Count
+        Subnets               = SafeCount $subnetAnalysis
+        VNets                 = SafeCount $vnetAnalysis
+        PrivateEndpoints      = SafeCount $privateEndpointFindings
+        NSGRiskyRules         = SafeCount $nsgRuleFindings
+        OrphanedResources     = SafeCount $orphanedResources
+        StorageShares         = SafeCount $fslogixStorageAnalysis
+        DiagnosticSettings    = SafeCount $diagnosticSettings
+        AlertRules            = SafeCount $alertRules
+        ActivityLogEntries    = SafeCount $activityLogEntries
+        PolicyAssignments     = SafeCount $policyAssignments
+        GalleryImages         = SafeCount $galleryAnalysis
+        MarketplaceImages     = SafeCount $marketplaceImageDetails
     }
     AnalysisErrors           = @()
     CollectorTool            = "avd-data-collector"
@@ -2087,11 +3061,46 @@ if ($IncludeCapacityReservations) {
 if ($IncludeReservedInstances) {
     Write-Host "  Reserved Inst.:  $(SafeCount $reservedInstances)" -ForegroundColor White
 }
-if ($ScrubPII) {
-    Write-Host "  PII:     Scrubbed (identifiers anonymized)" -ForegroundColor Magenta
-}
 if ($IncludeQuotaUsage) {
     Write-Host "  Quota Entries:   $(SafeCount $quotaUsage)" -ForegroundColor White
+}
+if ($IncludeResourceTags -and (SafeCount $resourceTags) -gt 0) {
+    Write-Host "  Resource Tags:   $(SafeCount $resourceTags)" -ForegroundColor White
+}
+if ($IncludeCostData) {
+    Write-Host "  Cost Entries:    $(SafeCount $actualCostData) ($(($vmActualMonthlyCost.Keys).Count) VMs)" -ForegroundColor White
+}
+if ($IncludeNetworkTopology) {
+    Write-Host "  Subnets:         $(SafeCount $subnetAnalysis)" -ForegroundColor White
+    Write-Host "  VNets:           $(SafeCount $vnetAnalysis)" -ForegroundColor White
+    if ((SafeCount $nsgRuleFindings) -gt 0) {
+        Write-Host "  Risky NSG Rules: $(SafeCount $nsgRuleFindings)" -ForegroundColor Yellow
+    }
+}
+if ($IncludeOrphanedResources -and (SafeCount $orphanedResources) -gt 0) {
+    Write-Host "  Orphaned Res.:   $(SafeCount $orphanedResources)" -ForegroundColor Yellow
+}
+if ($IncludeStorageAnalysis -and (SafeCount $fslogixStorageAnalysis) -gt 0) {
+    Write-Host "  Storage Shares:  $(SafeCount $fslogixStorageAnalysis)" -ForegroundColor White
+}
+if ($IncludeDiagnosticSettings -and (SafeCount $diagnosticSettings) -gt 0) {
+    Write-Host "  Diag Settings:   $(SafeCount $diagnosticSettings)" -ForegroundColor White
+}
+if ($IncludeAlertRules -and (SafeCount $alertRules) -gt 0) {
+    Write-Host "  Alert Rules:     $(SafeCount $alertRules)" -ForegroundColor White
+}
+if ($IncludeActivityLog -and (SafeCount $activityLogEntries) -gt 0) {
+    Write-Host "  Activity Log:    $(SafeCount $activityLogEntries) entries" -ForegroundColor White
+}
+if ($IncludePolicyAssignments -and (SafeCount $policyAssignments) -gt 0) {
+    Write-Host "  Policy Assigns:  $(SafeCount $policyAssignments)" -ForegroundColor White
+}
+if ($IncludeImageAnalysis) {
+    Write-Host "  Gallery Images:  $(SafeCount $galleryAnalysis)" -ForegroundColor White
+    Write-Host "  Marketplace SKUs:$(SafeCount $marketplaceImageDetails)" -ForegroundColor White
+}
+if ($ScrubPII) {
+    Write-Host "  PII:             Scrubbed (identifiers anonymized)" -ForegroundColor Magenta
 }
 Write-Host ""
 Write-Host "  Runtime: $([math]::Round($elapsed.TotalMinutes, 1)) minutes" -ForegroundColor Gray

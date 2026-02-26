@@ -2,6 +2,33 @@
 
 All notable changes to the AVD Data Collector will be documented in this file.
 
+## [1.1.0] — 2025-06-14
+
+### Added
+- **Extended Data Collection (Step 1b)** — 10 new optional collection categories:
+  - **Cost Data** (`-IncludeCostData`): Azure Cost Management per-VM and infrastructure costs (last 30 days)
+  - **Network Topology** (`-IncludeNetworkTopology`): VNet/subnet analysis, DNS config, peering, NSG rule evaluation, private endpoints, NAT Gateway
+  - **Image Analysis** (`-IncludeImageAnalysis`): Azure Compute Gallery image versions, marketplace image freshness, replica counts
+  - **Storage Analysis** (`-IncludeStorageAnalysis`): FSLogix storage accounts, file share capacity/quotas, private endpoints
+  - **Orphaned Resources** (`-IncludeOrphanedResources`): Unattached disks, unused NICs, unassociated public IPs
+  - **Diagnostic Settings** (`-IncludeDiagnosticSettings`): Host pool diagnostic log forwarding configuration
+  - **Alert Rules** (`-IncludeAlertRules`): Azure Monitor metric alerts and scheduled query rules
+  - **Activity Log** (`-IncludeActivityLog`): Last 7 days of activity per AVD resource group
+  - **Policy Assignments** (`-IncludePolicyAssignments`): Azure Policy assignments and compliance state
+  - **Resource Tags** (`-IncludeResourceTags`): Tag extraction from VMs, host pools, and storage accounts
+- **`-IncludeAllExtended`** convenience switch: enables all extended collection flags at once
+- **Diagnostic Readiness** post-processing: builds `diagnostic-readiness.json` from TableDiscovery KQL results
+- **NSG rule findings** serialized to `nsg-rule-findings.json` — previously only available in live EP mode
+- **Reserved Instance collection** (`-IncludeReservedInstances`) from previous session
+- Schema version bumped to 2.0 (backward compatible — EP auto-detects extended files)
+- Enhanced metadata: `ExtendedCollections` flags, 15+ new data counts, dynamic `SkipActualCosts` flag
+- Az.Storage module support (optional, for FSLogix storage analysis)
+- Az.Network enhanced usage (subnet/VNet/NSG/PE analysis)
+- AVD resource group tracking for scoped collection
+
+### Changed
+- Metadata `SkipActualCosts` now dynamically set based on whether cost data was collected
+
 ## [1.0.0] — 2025-06-01
 
 ### Added
