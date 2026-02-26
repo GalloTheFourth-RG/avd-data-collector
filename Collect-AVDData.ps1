@@ -330,91 +330,6 @@ function Protect-KqlRow {
         }
     }
     return $Row
-
-# =========================================================
-# Helpers
-# =========================================================
-## SafeArray is defined earlier to ensure availability before usage
-
-function SafeCount {
-    param([object]$Obj)
-    if ($null -eq $Obj) { return 0 }
-    if ($Obj -is [System.Collections.ICollection]) { return $Obj.Count }
-    return @($Obj).Count
-}
-
-function SafeProp {
-    param([object]$Obj, [string]$Name)
-    if ($null -eq $Obj) { return $null }
-    if ($Obj.PSObject.Properties.Name -contains $Name) { return $Obj.$Name }
-    return $null
-}
-
-function SafeArmProp {
-    param([object]$Obj, [string]$Name)
-    if ($null -eq $Obj) { return $null }
-    # Az module v3: top-level
-    if ($Obj.PSObject.Properties.Name -contains $Name) { return $Obj.$Name }
-    # Az module v4+: nested under .Properties
-    if ($Obj.PSObject.Properties.Name -contains 'Properties') {
-        $p = $Obj.Properties
-        if ($null -ne $p -and $p.PSObject.Properties.Name -contains $Name) { return $p.$Name }
-    }
-    # Az module v4+: nested under .ResourceProperties
-    if ($Obj.PSObject.Properties.Name -contains 'ResourceProperties') {
-        $rp = $Obj.ResourceProperties
-        if ($null -ne $rp -and $rp.PSObject.Properties.Name -contains $Name) { return $rp.$Name }
-    }
-    return $null
-}
-
-function Get-SubFromArmId {
-    param([string]$ArmId)
-    if ([string]::IsNullOrEmpty($ArmId)) { return "" }
-    $parts = $ArmId -split '/'
-    if ($parts.Count -ge 3) { return $parts[2] }
-    return ""
-}
-
-function Get-NameFromArmId {
-    param([string]$ArmId)
-    if ([string]::IsNullOrEmpty($ArmId)) { return "" }
-    $parts = $ArmId -split '/'
-    if ($parts.Count -ge 1) { return $parts[-1] }
-    return ""
-}
-
-function Get-ArmIdSafe {
-    param([object]$Obj)
-    if ($null -eq $Obj) { return "" }
-    if ($Obj.PSObject.Properties.Name -contains 'Id') { return $Obj.Id }
-    if ($Obj.PSObject.Properties.Name -contains 'ResourceId') { return $Obj.ResourceId }
-    return ""
-}
-
-function Write-Step {
-    param([string]$Step, [string]$Message, [string]$Status = "Start")
-    $prefix = switch ($Status) {
-        "Start"    { "  " }
-        "Progress" { "    " }
-        "Done"     { "  [OK] " }
-        "Skip"     { "  [SKIP] " }
-        "Warn"     { "  [WARN] " }
-        "Error"    { "  [ERR] " }
-    }
-    $color = switch ($Status) {
-        "Start"    { "Cyan" }
-        "Progress" { "Gray" }
-        "Done"     { "Green" }
-        "Skip"     { "Yellow" }
-        "Warn"     { "Yellow" }
-        "Error"    { "Red" }
-    }
-    if ($Status -eq "Progress") {
-        Write-Host "${prefix}${Message}" -ForegroundColor $color
-    } else {
-        Write-Host "${prefix}${Step} - ${Message}" -ForegroundColor $color
-    }
 }
 
 # =========================================================
@@ -454,136 +369,18 @@ foreach ($module in $requiredModules) {
         Write-Host "  ✓ Found: $($module.Name) v$($installed.Version)" -ForegroundColor Green
     }
 }
-    $totalSteps = if ($SkipLogAnalyticsQueries) { 3 } else { 4 }
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-    Write-Host "  Step 2 of $totalSteps`: Collecting Log Analytics Perf Metrics" -ForegroundColor Cyan
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+
+if ($missingModules.Count -gt 0) {
     Write-Host ""
-
-    # Build VM name list for Log Analytics perf queries.
-    # Use the raw (unscrubbed) VM names when available so queries match the 'Computer' field.
-    if (Get-Variable -Name rawVmNames -Scope Script -ErrorAction SilentlyContinue -and (SafeCount $rawVmNames) -gt 0) {
-        $vmNames = @($rawVmNames | Select-Object -Unique)
+    Write-Host "Missing $($missingModules.Count) required module(s). Install them with:" -ForegroundColor Red
+    foreach ($m in $missingModules) {
+        Write-Host "  Install-Module -Name $m -Scope CurrentUser -Force" -ForegroundColor White
     }
-    elseif (SafeCount $vms -gt 0) {
-        # vms may contain protected/anonymized names when -ScrubPII is used; only use when no raw names present
-        $vmNames = @($vms | Where-Object { $_.VMName } | Select-Object -ExpandProperty VMName -Unique)
-    }
-    else {
-        $vmNames = @()
-    }
-    $metricsEnd   = Get-Date
-    $metricsStart = $metricsEnd.AddDays(-$MetricsLookbackDays)
-    $grain = $MetricsTimeGrainMinutes
-
-    Write-Host "  Collecting Perf metrics for $(SafeCount $vmNames) VMs ($MetricsLookbackDays-day lookback, ${MetricsTimeGrainMinutes}m grain)" -ForegroundColor Gray
     Write-Host ""
-
-    $metricsCollected = [System.Collections.Generic.List[object]]::new()
-    $metricsTotal = SafeCount $vmNames
-
-    foreach ($wsId in $LogAnalyticsWorkspaceResourceIds) {
-        $parts = $wsId.TrimEnd('/') -split '/'
-        $resourceGroupName = $parts[4]
-        $workspaceName     = $parts[8]
-        $workspace = Get-AzOperationalInsightsWorkspace -ResourceGroupName $resourceGroupName -Name $workspaceName -ErrorAction Stop
-        $workspaceId = $workspace.CustomerId
-
-        foreach ($vmName in $vmNames) {
-            $kql = @"
-Perf
-| where Computer == '$vmName'
-| where TimeGenerated between (datetime($metricsStart) .. datetime($metricsEnd))
-| where (ObjectName == 'Processor' and CounterName == '% Processor Time' and InstanceName == '_Total')
-   or (ObjectName == 'Memory' and CounterName == 'Available MBytes')
-| summarize AvgValue=avg(CounterValue), MaxValue=max(CounterValue) by Computer, ObjectName, CounterName, bin(TimeGenerated, ${grain}m)
-| order by TimeGenerated asc
-"@
-            $result = Invoke-AzOperationalInsightsQuery -WorkspaceId $workspaceId -Query $kql -ErrorAction Stop
-            if ($result.Results) {
-                foreach ($row in $result.Results) {
-                    $metric = if ($row.ObjectName -eq 'Processor') { 'Percentage CPU' } elseif ($row.ObjectName -eq 'Memory') { 'Available Memory Bytes' } else { $row.CounterName }
-                    $metricsCollected.Add([PSCustomObject]@{
-                        VmName      = $row.Computer
-                        Metric      = $metric
-                        Aggregation = 'Average'
-                        TimeStamp   = $row.TimeGenerated
-                        Value       = if ($metric -eq 'Available Memory Bytes') { $row.AvgValue * 1MB } else { $row.AvgValue }
-                    })
-                    $metricsCollected.Add([PSCustomObject]@{
-                        VmName      = $row.Computer
-                        Metric      = $metric
-                        Aggregation = 'Maximum'
-                        TimeStamp   = $row.TimeGenerated
-                        Value       = if ($metric -eq 'Available Memory Bytes') { $row.MaxValue * 1MB } else { $row.MaxValue }
-                    })
-                }
-            }
-        }
-    }
-
-    foreach ($item in $metricsCollected) {
-        if ($ScrubPII) { $item.VmName = Protect-VMName $item.VmName }
-        $vmMetrics.Add($item)
-    }
-
-    Write-Host "  ✓ Metrics collected: $(SafeCount $vmMetrics) datapoints for $metricsTotal VMs" -ForegroundColor Green
-    Write-Host ""
-
-    # ── Incident Window Metrics (optional) ──
-    if ($IncludeIncidentWindow) {
-        Write-Host "  Collecting incident window Perf metrics ($IncidentWindowStart → $IncidentWindowEnd)..." -ForegroundColor Cyan
-
-        $incidentCollected = [System.Collections.Generic.List[object]]::new()
-
-        foreach ($wsId in $LogAnalyticsWorkspaceResourceIds) {
-            $parts = $wsId.TrimEnd('/') -split '/'
-            $resourceGroupName = $parts[4]
-            $workspaceName     = $parts[8]
-            $workspace = Get-AzOperationalInsightsWorkspace -ResourceGroupName $resourceGroupName -Name $workspaceName -ErrorAction Stop
-            $workspaceId = $workspace.CustomerId
-
-            foreach ($vmName in $vmNames) {
-                $kql = @"
-Perf
-| where Computer == '$vmName'
-| where TimeGenerated between (datetime($IncidentWindowStart) .. datetime($IncidentWindowEnd))
-| where (ObjectName == 'Processor' and CounterName == '% Processor Time' and InstanceName == '_Total')
-   or (ObjectName == 'Memory' and CounterName == 'Available MBytes')
-| summarize AvgValue=avg(CounterValue), MaxValue=max(CounterValue) by Computer, ObjectName, CounterName, bin(TimeGenerated, ${grain}m)
-| order by TimeGenerated asc
-"@
-                $result = Invoke-AzOperationalInsightsQuery -WorkspaceId $workspaceId -Query $kql -ErrorAction Stop
-                if ($result.Results) {
-                    foreach ($row in $result.Results) {
-                        $metric = if ($row.ObjectName -eq 'Processor') { 'Percentage CPU' } elseif ($row.ObjectName -eq 'Memory') { 'Available Memory Bytes' } else { $row.CounterName }
-                        $incidentCollected.Add([PSCustomObject]@{
-                            VmName      = $row.Computer
-                            Metric      = $metric
-                            Aggregation = 'Average'
-                            TimeStamp   = $row.TimeGenerated
-                            Value       = if ($metric -eq 'Available Memory Bytes') { $row.AvgValue * 1MB } else { $row.AvgValue }
-                        })
-                        $incidentCollected.Add([PSCustomObject]@{
-                            VmName      = $row.Computer
-                            Metric      = $metric
-                            Aggregation = 'Maximum'
-                            TimeStamp   = $row.TimeGenerated
-                            Value       = if ($metric -eq 'Available Memory Bytes') { $row.MaxValue * 1MB } else { $row.MaxValue }
-                        })
-                    }
-                }
-            }
-        }
-
-        foreach ($item in $incidentCollected) {
-            if ($ScrubPII) { $item.VmName = Protect-VMName $item.VmName }
-            $vmMetricsIncident.Add($item)
-        }
-        Write-Host "  ✓ Incident window metrics collected: $(SafeCount $vmMetricsIncident) datapoints" -ForegroundColor Green
-        Write-Host ""
-    }
+    exit 1
 }
+
+Write-Host ""
 
 # Raw VM ARM IDs for metrics collection (unaffected by PII scrubbing)
 $rawVmIds               = [System.Collections.Generic.List[string]]::new()
