@@ -1,0 +1,31 @@
+Subject: How to run the AVD data collector
+
+Hi,
+
+Thank you for sharing your environment! To gather diagnostics with the AVD Data Collector, please follow these steps:
+
+1. Open PowerShell 7 (pwsh.exe).
+2. Download or copy the latest `Collect-AVDData.ps1` script into a folder on the machine.
+3. Log in to Azure:
+   ```powershell
+   Connect-AzAccount -TenantId <tenant-id>   # interactively sign in
+   ```
+4. Run the collector specifying your tenant, subscription(s) and any optional parameters. Example:
+   ```powershell
+   pwsh -NoProfile -Command `
+     "& 'C:\path\to\Collect-AVDData.ps1' `
+        -TenantId '00000000-0000-0000-0000-000000000000' `
+        -SubscriptionIds @('11111111-1111-1111-1111-111111111111') `
+        -LogAnalyticsWorkspaceResourceIds @('/subscriptions/1111.../resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/ws') `
+        -IncludeCapacityReservations `
+        -IncludeQuotaUsage `
+        -MetricsLookbackDays 14 `
+        -ScrubPII"
+   ```
+5. Wait for the script to finish; it will display progress and create a folder/ZIP named `AVD-CollectionPack-<timestamp>`.
+6. Send the resulting ZIP file (and the `diagnostic.log` inside it if there were issues) to me for analysis.
+
+Feel free to modify the parameters to skip metrics or KQL, change the lookback period, or enable PII scrubbing as needed.
+
+Best,
+Your automated AVD assistant
