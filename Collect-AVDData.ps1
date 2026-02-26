@@ -71,8 +71,10 @@ param(
     [switch]$ScrubPII,
     [switch]$DryRun,
     [switch]$SkipDisclaimer,
+    [int]$MetricsParallel = 15,
+    [int]$KqlParallel     = 5,
     [string]$OutputPath = "."
-)
+)  # MetricsParallel and KqlParallel control ForEach-Object throttling (default 15,5)
 
 # Initialize script-scoped variables
 $script:currentSubContext = $null
@@ -1540,7 +1542,7 @@ else {
                 }
             }
             catch { }
-        } -ThrottleLimit 15
+        } -ThrottleLimit $MetricsParallel
 
         foreach ($item in $incidentCollected) {
             if ($ScrubPII) { $item.VmId = Protect-ArmId $item.VmId }
@@ -1704,7 +1706,7 @@ else {
                     RowCount            = 0
                 })
             }
-        } -ThrottleLimit 5
+        } -ThrottleLimit $KqlParallel
 
         # increment workspace-based counter and update progress bar
         $script:laProcessed += $remainingQueries.Count
