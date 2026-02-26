@@ -1664,15 +1664,17 @@ else {
                     RowCount            = 0
                 })
             }
-            # signal one query completed
-            [PSCustomObject]@{ Progress = 1 }
+            # signal one query completed (only progress tokens should reach the main thread)
+            [PSCustomObject]@{ _ProgressToken = $true; Progress = 1 }
         } -ThrottleLimit $KqlParallel | ForEach-Object {
-            # update progress on the main thread
-            $global:laProcessed += $_.Progress
-            try {
-                $pct = [math]::Round(($global:laProcessed / $laTotal) * 100)
-                Write-Progress -Activity "Running KQL queries" -Status "$global:laProcessed/$laTotal queries" -PercentComplete $pct
-            } catch { }
+            # Only process progress tokens — ignore anything else that leaks from parallel runspaces
+            if ($_.PSObject.Properties['_ProgressToken']) {
+                $global:laProcessed += $_.Progress
+                try {
+                    $pct = [math]::Round(($global:laProcessed / $laTotal) * 100)
+                    Write-Progress -Activity "Running KQL queries" -Status "$global:laProcessed/$laTotal queries" -PercentComplete $pct
+                } catch { }
+            }
         }
 
         foreach ($item in $kqlCollected) {
