@@ -302,30 +302,30 @@ $capacityReservationGroups = [System.Collections.Generic.List[object]]::new()
 $reservedInstances = [System.Collections.Generic.List[object]]::new()
 $quotaUsage = [System.Collections.Generic.List[object]]::new()
 
-# New v2.0 collection containers (script-scoped to satisfy PSScriptAnalyzer — used in Export-PackJson calls)
-$script:actualCostData = [System.Collections.Generic.List[object]]::new()
-$script:vmActualMonthlyCost = @{}
-$script:infraCostData = [System.Collections.Generic.List[object]]::new()
-$script:costAccessGranted = [System.Collections.Generic.List[string]]::new()
-$script:costAccessDenied = [System.Collections.Generic.List[string]]::new()
-$script:subnetAnalysis = [System.Collections.Generic.List[object]]::new()
-$script:vnetAnalysis = [System.Collections.Generic.List[object]]::new()
-$script:privateEndpointFindings = [System.Collections.Generic.List[object]]::new()
-$script:nsgRuleFindings = [System.Collections.Generic.List[object]]::new()
-$script:galleryAnalysis = [System.Collections.Generic.List[object]]::new()
-$script:galleryImageDetails = [System.Collections.Generic.List[object]]::new()
-$script:marketplaceImageDetails = [System.Collections.Generic.List[object]]::new()
-$script:fslogixStorageAnalysis = [System.Collections.Generic.List[object]]::new()
-$script:fslogixShares = [System.Collections.Generic.List[object]]::new()
-$script:orphanedResources = [System.Collections.Generic.List[object]]::new()
-$script:diagnosticSettings = [System.Collections.Generic.List[object]]::new()
-$script:alertRules = [System.Collections.Generic.List[object]]::new()
-$script:activityLogEntries = [System.Collections.Generic.List[object]]::new()
-$script:policyAssignments = [System.Collections.Generic.List[object]]::new()
-$script:resourceTags = [System.Collections.Generic.List[object]]::new()
+# New v2.0 collection containers
+$actualCostData = [System.Collections.Generic.List[object]]::new()
+$vmActualMonthlyCost = @{}
+$infraCostData = [System.Collections.Generic.List[object]]::new()
+$costAccessGranted = [System.Collections.Generic.List[string]]::new()
+$costAccessDenied = [System.Collections.Generic.List[string]]::new()
+$subnetAnalysis = [System.Collections.Generic.List[object]]::new()
+$vnetAnalysis = [System.Collections.Generic.List[object]]::new()
+$privateEndpointFindings = [System.Collections.Generic.List[object]]::new()
+$nsgRuleFindings = [System.Collections.Generic.List[object]]::new()
+$galleryAnalysis = [System.Collections.Generic.List[object]]::new()
+$galleryImageDetails = [System.Collections.Generic.List[object]]::new()
+$marketplaceImageDetails = [System.Collections.Generic.List[object]]::new()
+$fslogixStorageAnalysis = [System.Collections.Generic.List[object]]::new()
+$fslogixShares = [System.Collections.Generic.List[object]]::new()
+$orphanedResources = [System.Collections.Generic.List[object]]::new()
+$diagnosticSettings = [System.Collections.Generic.List[object]]::new()
+$alertRules = [System.Collections.Generic.List[object]]::new()
+$activityLogEntries = [System.Collections.Generic.List[object]]::new()
+$policyAssignments = [System.Collections.Generic.List[object]]::new()
+$resourceTags = [System.Collections.Generic.List[object]]::new()
 
 # Track all AVD resource groups across subscriptions (SubId|RGName → $true)
-$script:avdResourceGroups = @{}
+$avdResourceGroups = @{}
 
 # Misc helpers / caches
 $vmMetrics = $vmMetrics
@@ -1028,7 +1028,7 @@ foreach ($subId in $SubscriptionIds) {
                 $hpResourceGroups += $rgName
             }
             # Track AVD resource groups globally for later extended collection steps
-            if ($rgName) { $script:avdResourceGroups["$subId|$rgName".ToLower()] = $true }
+            if ($rgName) { $avdResourceGroups["$subId|$rgName".ToLower()] = $true }
         }
     }
 
@@ -1512,13 +1512,13 @@ Write-Host ""
 foreach ($v in $vms) {
     $rawSubId = if ($ScrubPII) { $null } else { $v.SubscriptionId }
     $rawRg    = if ($ScrubPII) { $null } else { $v.ResourceGroup }
-    if ($rawSubId -and $rawRg) { $script:avdResourceGroups["$rawSubId|$rawRg".ToLower()] = $true }
+    if ($rawSubId -and $rawRg) { $avdResourceGroups["$rawSubId|$rawRg".ToLower()] = $true }
 }
 # Also ensure host pool RGs are tracked (already done during enumeration, but defensive)
 foreach ($hp in $hostPools) {
     $hpSubId = if ($ScrubPII) { $null } else { $hp.SubscriptionId }
     $hpRg    = if ($ScrubPII) { $null } else { $hp.ResourceGroup }
-    if ($hpSubId -and $hpRg) { $script:avdResourceGroups["$hpSubId|$hpRg".ToLower()] = $true }
+    if ($hpSubId -and $hpRg) { $avdResourceGroups["$hpSubId|$hpRg".ToLower()] = $true }
 }
 
 $hasExtendedCollection = $IncludeCostData -or $IncludeNetworkTopology -or $IncludeStorageAnalysis -or $IncludeOrphanedResources -or $IncludeDiagnosticSettings -or $IncludeAlertRules -or $IncludeActivityLog -or $IncludePolicyAssignments -or $IncludeResourceTags -or $IncludeImageAnalysis
@@ -1579,7 +1579,7 @@ if ($hasExtendedCollection) {
             }
         }
 
-        $subAvdRgs = @($script:avdResourceGroups.Keys | Where-Object { $_.StartsWith("$subId|".ToLower()) } | ForEach-Object { ($_ -split '\|', 2)[1] })
+        $subAvdRgs = @($avdResourceGroups.Keys | Where-Object { $_.StartsWith("$subId|".ToLower()) } | ForEach-Object { ($_ -split '\|', 2)[1] })
         if ($subAvdRgs.Count -eq 0) { continue }
 
         Write-Step -Step "Extended" -Message "Subscription $(Protect-SubscriptionId $subId) — $($subAvdRgs.Count) AVD RGs" -Status "Progress"
