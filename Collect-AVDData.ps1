@@ -338,7 +338,7 @@ function Protect-KqlRow {
 Write-Host ""
 Write-Host "╔═══════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
 Write-Host "║                                                                       ║" -ForegroundColor Cyan
-Write-Host "║              AVD Data Collector — v$($script:ScriptVersion)                            ║" -ForegroundColor Cyan
+Write-Host "║              AVD Data Collector — v$($script:ScriptVersion)                              ║" -ForegroundColor Cyan
 Write-Host "║              Open-Source Data Collection for Azure Virtual Desktop    ║" -ForegroundColor Cyan
 Write-Host "║                                                                       ║" -ForegroundColor Cyan
 Write-Host "╚═══════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
