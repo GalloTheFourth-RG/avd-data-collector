@@ -1868,6 +1868,7 @@ catch {
 # make sure diagnostic transcript is closed
 if (Get-Command Stop-Transcript -ErrorAction SilentlyContinue) {
     Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+}
 
 # =========================================================
 # Summary
