@@ -113,6 +113,31 @@ if (-not (Get-Command SafeCount -ErrorAction SilentlyContinue)) {
     }
 }
 
+# helper to retry Az calls on throttling or transient errors
+function Invoke-WithRetry {
+    param(
+        [Parameter(Mandatory)] [scriptblock]$ScriptBlock,
+        [int]$MaxAttempts = 4
+    )
+    $attempt = 0
+    while ($true) {
+        try {
+            return & $ScriptBlock
+        }
+        catch {
+            $msg = $_.Exception.Message
+            if ($msg -match '429|throttl|503' -and $attempt -lt $MaxAttempts) {
+                $attempt++
+                $delay = [math]::Pow(2, $attempt) * 5
+                Write-Host "    Throttled or transient error, retrying in $delay seconds (attempt $attempt)" -ForegroundColor Yellow
+                Start-Sleep -Seconds $delay
+                continue
+            }
+            throw
+        }
+    }
+}
+
 # Ensure SafeArray is available before first usage
 if (-not (Get-Command SafeArray -ErrorAction SilentlyContinue)) {
     function SafeArray {
@@ -799,7 +824,7 @@ foreach ($subId in $SubscriptionIds) {
         # Skip Set-AzContext if we already validated context for this subscription during auth
         if ($script:currentSubContext -ne $subId) {
             try {
-                Set-AzContext -SubscriptionId $subId -TenantId $TenantId -ErrorAction Stop | Out-Null
+                Invoke-WithRetry { Set-AzContext -SubscriptionId $subId -TenantId $TenantId -ErrorAction Stop | Out-Null }
                 $script:currentSubContext = $subId
             }
             catch {
@@ -937,7 +962,7 @@ foreach ($subId in $SubscriptionIds) {
             # Tier 3: On-demand discovery
             else {
                 try {
-                    $vmResource = Get-AzResource -ResourceType "Microsoft.Compute/virtualMachines" -Name $vmName -ErrorAction SilentlyContinue | Select-Object -First 1
+                    $vmResource = Invoke-WithRetry { Get-AzResource -ResourceType "Microsoft.Compute/virtualMachines" -Name $vmName -ErrorAction SilentlyContinue | Select-Object -First 1 }
                     if ($vmResource) {
                         $discoveredRg = $vmResource.ResourceGroupName
                         if (-not $vmCacheByRg.ContainsKey($discoveredRg)) {
@@ -1180,7 +1205,7 @@ foreach ($subId in $SubscriptionIds) {
     # ── Scaling Plans ──
     Write-Step -Step "Scaling Plans" -Message "Enumerating..." -Status "Progress"
     try {
-        $spObjs = Get-AzResource -ResourceType "Microsoft.DesktopVirtualization/scalingPlans" -ExpandProperties -ErrorAction SilentlyContinue
+        $spObjs = Invoke-WithRetry { Get-AzResource -ResourceType "Microsoft.DesktopVirtualization/scalingPlans" -ExpandProperties -ErrorAction SilentlyContinue }
         foreach ($sp in SafeArray $spObjs) {
             Expand-ScalingPlanEvidence -PlanResource $sp -SubId $subId
         }
@@ -1369,7 +1394,7 @@ else {
                 if (-not $metricObjectsAll -or ($metricObjectsAll | Measure-Object).Count -eq 0) {
                     Write-Host "    Get-AzMetric returned no metric objects for $vmId" -ForegroundColor Yellow
                     try {
-                        $res = Get-AzResource -ResourceId $vmId -ErrorAction SilentlyContinue
+                        $res = Invoke-WithRetry { Get-AzResource -ResourceId $vmId -ErrorAction SilentlyContinue }
                         if ($res) { Write-Host "    Resource exists: $($res.ResourceType) $($res.Name) ($($res.Location))" -ForegroundColor Gray }
                         else { Write-Host "    Get-AzResource returned no resource for $vmId" -ForegroundColor Yellow }
                     } catch { Write-Host "    Failed to query resource metadata: ${($_.Exception.Message)}" -ForegroundColor Yellow }
@@ -1603,7 +1628,7 @@ else {
         $wsSubId = Get-SubFromArmId $wsId
         if ($wsSubId -and $wsSubId -ne $script:currentSubContext) {
             try {
-                Set-AzContext -SubscriptionId $wsSubId -TenantId $TenantId -ErrorAction Stop | Out-Null
+                Invoke-WithRetry { Set-AzContext -SubscriptionId $wsSubId -TenantId $TenantId -ErrorAction Stop | Out-Null }
                 $script:currentSubContext = $wsSubId
             }
             catch {
@@ -1716,7 +1741,7 @@ if ($IncludeQuotaUsage) {
         try {
             # Switch to first subscription for quota query
             if ($script:currentSubContext -ne $SubscriptionIds[0]) {
-                Set-AzContext -SubscriptionId $SubscriptionIds[0] -TenantId $TenantId -ErrorAction Stop | Out-Null
+                Invoke-WithRetry { Set-AzContext -SubscriptionId $SubscriptionIds[0] -TenantId $TenantId -ErrorAction Stop | Out-Null }
                 $script:currentSubContext = $SubscriptionIds[0]
             }
             $usageData = @(Get-AzVMUsage -Location $region -ErrorAction Stop)
