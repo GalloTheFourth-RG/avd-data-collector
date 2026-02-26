@@ -1621,8 +1621,8 @@ else {
         @{ Label = "CurrentWindow_DisconnectHeatmap";       Query = $kqlQueries["kqlDisconnectHeatmap"] }
     ) | Where-Object { $null -ne $_.Query }
 
-    # progress tracking for queries
-    $script:laProcessed = 0
+    # progress tracking for queries (use a global counter so parallel runspaces can update it safely)
+    $global:laProcessed = 0
     $remainingQueryCount = ($queryDispatchList | Where-Object { $_.Label -ne "CurrentWindow_TableDiscovery" }).Count
     $laTotal = (SafeCount $LogAnalyticsWorkspaceResourceIds) * $remainingQueryCount
 
@@ -1710,14 +1710,17 @@ else {
                     RowCount            = 0
                 })
             }
+            finally {
+                # increment global counter and update progress
+                $newCount = [System.Threading.Interlocked]::Increment([ref]$global:laProcessed)
+                try {
+                    $pct = [math]::Round(($newCount / $using:laTotal) * 100)
+                    Write-Progress -Activity "Running KQL queries" -Status "$newCount/$using:laTotal queries" -PercentComplete $pct
+                } catch { }
+            }
         } -ThrottleLimit $KqlParallel
 
-        # increment workspace-based counter and update progress bar
-        $script:laProcessed += $remainingQueries.Count
-        try {
-            $pct2 = [math]::Round(($script:laProcessed / $laTotal) * 100)
-            Write-Progress -Activity "Running KQL queries" -Status "$script:laProcessed/$laTotal queries" -PercentComplete $pct2
-        } catch { }
+        # after workspace queries finish we no longer need to bump the counter here
 
         foreach ($item in $kqlCollected) {
             if ($ScrubPII) {
@@ -1729,6 +1732,9 @@ else {
 
         Write-Step -Step "KQL" -Message "$wsName — $(SafeCount $kqlCollected) results collected" -Status "Done"
     }
+
+    # clear progress display when finished
+    if ($laTotal -gt 0) { Write-Progress -Activity "Running KQL queries" -Completed }
 
     Write-Host ""
     Write-Host "  ✓ KQL collection complete: $(SafeCount $laResults) total results" -ForegroundColor Green
