@@ -624,15 +624,13 @@ $subsFailed = @()
 foreach ($subId in $SubscriptionIds) {
     if ($subId -notin $availableSubIds) {
         $subsFailed += $subId
-        Write-Host "  ✗ Subscription $subId — not accessible with this account" -ForegroundColor Red
+        Write-Host "  ✗ Subscription $(Protect-SubscriptionId $subId) — not accessible with this account" -ForegroundColor Red
         $closestMatch = $availableSubs | Where-Object { $_.Name -match 'vdi|avd|desktop' -or $_.Id -like "$($subId.Substring(0,8))*" } | Select-Object -First 1
         if ($closestMatch) {
-            Write-Host "    Did you mean: $($closestMatch.Name) ($($closestMatch.Id))?" -ForegroundColor Yellow
+            Write-Host "    Did you mean: $(Protect-SubscriptionId $closestMatch.Id)?" -ForegroundColor Yellow
         }
     } else {
-        $subMatch = $availableSubs | Where-Object { $_.Id -eq $subId } | Select-Object -First 1
-        $subName = if ($subMatch) { $subMatch.Name } else { $subId }
-        Write-Host "  ✓ $subName ($subId)" -ForegroundColor Green
+        Write-Host "  ✓ $(Protect-SubscriptionId $subId)" -ForegroundColor Green
     }
 }
 
@@ -995,7 +993,7 @@ Write-Host ""
 foreach ($subId in $SubscriptionIds) {
     try {
         $subsProcessed++
-        Write-Step -Step "Subscription $subsProcessed/$(SafeCount $SubscriptionIds)" -Message $subId
+        Write-Step -Step "Subscription $subsProcessed/$(SafeCount $SubscriptionIds)" -Message (Protect-SubscriptionId $subId)
 
         # Skip Set-AzContext if we already validated context for this subscription during auth
         if ($script:currentSubContext -ne $subId) {
@@ -1005,7 +1003,7 @@ foreach ($subId in $SubscriptionIds) {
             }
             catch {
                 $errMsg = $_.Exception.Message
-                Write-Step -Step "Subscription" -Message "Cannot access $subId" -Status "Error"
+                Write-Step -Step "Subscription" -Message "Cannot access $(Protect-SubscriptionId $subId)" -Status "Error"
                 if ($errMsg -match 'interaction is required|multi-factor|MFA|conditional access') {
                     Write-Host "    Token expired or MFA required. Run: Connect-AzAccount -TenantId '$TenantId'" -ForegroundColor Yellow
                 } elseif ($errMsg -match 'not found|does not exist|invalid') {
@@ -1049,7 +1047,7 @@ foreach ($subId in $SubscriptionIds) {
     foreach ($bulkRg in $hpResourceGroups) {
         if (-not $vmCacheByRg.ContainsKey($bulkRg)) {
             try {
-                Write-Step -Step "VM Cache" -Message "Bulk-fetching VMs in RG: $bulkRg" -Status "Progress"
+                Write-Step -Step "VM Cache" -Message "Bulk-fetching VMs in RG: $(Protect-ResourceGroup $bulkRg)" -Status "Progress"
                 $rgVmModels = @(Get-AzVM -ResourceGroupName $bulkRg -ErrorAction SilentlyContinue)
                 $rgVmStatuses = @(Get-AzVM -ResourceGroupName $bulkRg -Status -ErrorAction SilentlyContinue)
 
@@ -1065,7 +1063,7 @@ foreach ($subId in $SubscriptionIds) {
                 }
             }
             catch {
-                Write-Step -Step "VM Cache" -Message "Failed to pre-fetch RG $bulkRg — $($_.Exception.Message)" -Status "Warn"
+                Write-Step -Step "VM Cache" -Message "Failed to pre-fetch RG $(Protect-ResourceGroup $bulkRg) — $($_.Exception.Message)" -Status "Warn"
             }
         }
     }
@@ -1098,13 +1096,13 @@ foreach ($subId in $SubscriptionIds) {
         $rawHostPoolIds[$scrubHpName] = $hpId
 
         # Session Hosts
-        Write-Step -Step "Session Hosts" -Message "$hpName" -Status "Progress"
+        Write-Step -Step "Session Hosts" -Message (Protect-HostPoolName $hpName) -Status "Progress"
         $shObjs = @()
         try {
             $shObjs = @(Get-AzWvdSessionHost -ResourceGroupName $hpRg -HostPoolName $hpName -ErrorAction SilentlyContinue)
         }
         catch {
-            Write-Step -Step "Session Hosts" -Message "Failed for $hpName — $($_.Exception.Message)" -Status "Warn"
+            Write-Step -Step "Session Hosts" -Message "Failed for $(Protect-HostPoolName $hpName) — $($_.Exception.Message)" -Status "Warn"
         }
 
         foreach ($sh in $shObjs) {
@@ -1611,7 +1609,7 @@ if ($hasExtendedCollection) {
                 $script:currentSubContext = $subId
             }
             catch {
-                Write-Step -Step "Extended" -Message "Cannot switch to $subId — skipping" -Status "Warn"
+                Write-Step -Step "Extended" -Message "Cannot switch to $(Protect-SubscriptionId $subId) — skipping" -Status "Warn"
                 continue
             }
         }
@@ -2013,7 +2011,7 @@ if ($hasExtendedCollection) {
                     }
                 }
                 catch {
-                    Write-Step -Step "Orphaned" -Message "Failed for $rgName — $($_.Exception.Message)" -Status "Warn"
+                    Write-Step -Step "Orphaned" -Message "Failed for $(Protect-ResourceGroup $rgName) — $($_.Exception.Message)" -Status "Warn"
                 }
             }
             Write-Host "    ✓ Orphaned resources: $(SafeCount $orphanedResources) found" -ForegroundColor Green
@@ -2079,7 +2077,7 @@ if ($hasExtendedCollection) {
                     }
                 }
                 catch {
-                    Write-Step -Step "Storage" -Message "Failed for $rgName — $($_.Exception.Message)" -Status "Warn"
+                    Write-Step -Step "Storage" -Message "Failed for $(Protect-ResourceGroup $rgName) — $($_.Exception.Message)" -Status "Warn"
                 }
             }
             Write-Host "    ✓ Storage: $(SafeCount $fslogixStorageAnalysis) shares ($(SafeCount $fslogixShares) FSLogix)" -ForegroundColor Green
@@ -2190,7 +2188,7 @@ if ($hasExtendedCollection) {
                     }
                 }
                 catch {
-                    Write-Step -Step "Activity Log" -Message "Failed for $rgName — $($_.Exception.Message)" -Status "Warn"
+                    Write-Step -Step "Activity Log" -Message "Failed for $(Protect-ResourceGroup $rgName) — $($_.Exception.Message)" -Status "Warn"
                 }
             }
             Write-Host "    ✓ Activity log: $(SafeCount $activityLogEntries) entries" -ForegroundColor Green
