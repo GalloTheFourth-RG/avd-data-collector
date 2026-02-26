@@ -1445,6 +1445,12 @@ else {
         catch { }
 
         [System.Threading.Interlocked]::Increment($processed) | Out-Null
+        # update progress bar in parallel runspaces
+        try {
+            $pct = [math]::Round(($processed.Value / $using:metricsTotal) * 100)
+            Write-Progress -Activity "Collecting Azure Monitor metrics" -Status "$($processed.Value)/$($using:metricsTotal) VMs" -PercentComplete $pct
+        } catch { }
+
     } -ThrottleLimit 15
 
     # Move from ConcurrentBag to List (and scrub VmId if needed)
@@ -1536,6 +1542,18 @@ else {
 
     $queryStart = (Get-Date).AddDays(-$MetricsLookbackDays)
     $queryEnd   = Get-Date
+
+    # progress tracking for queries
+    $laProcessed = [ref]0
+    $remainingQueryCount = ($queryDispatchList | Where-Object { $_.Label -ne "CurrentWindow_TableDiscovery" }).Count
+    $laTotal = (SafeCount $LogAnalyticsWorkspaceResourceIds) * $remainingQueryCount
+
+    # prepare progress monitoring for queries
+    $laProcessed = [ref]0
+    # total queries = workspaces * (queryDispatchList minus discovery)
+    $remainingQueryCount = ($queryDispatchList | Where-Object { $_.Label -ne "CurrentWindow_TableDiscovery" }).Count
+    $laTotal = (SafeCount $LogAnalyticsWorkspaceResourceIds) * $remainingQueryCount
+
 
     # Build query dispatch list
     $queryDispatchList = @(
@@ -1657,6 +1675,13 @@ else {
                     RowCount            = 0
                 })
             }
+            # record query completion and update progress
+            [System.Threading.Interlocked]::Increment($using:laProcessed) | Out-Null
+            try {
+                $pct2 = [math]::Round(($using:laProcessed.Value / $using:laTotal) * 100)
+                Write-Progress -Activity "Running KQL queries" -Status "$($using:laProcessed.Value)/$($using:laTotal) queries" -PercentComplete $pct2
+            } catch { }
+
         } -ThrottleLimit 5
 
         foreach ($item in $kqlCollected) {
