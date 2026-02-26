@@ -1848,7 +1848,7 @@ Write-Host "    ✓ collection-metadata.json" -ForegroundColor Green
 
 # ── Create ZIP ──
 # make sure diagnostic transcript is closed before archiving
-if (Get-Command Stop-Transcript -ErrorAction SilentlyContinue) { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null }
+if (Get-Command Stop-Transcript -ErrorAction SilentlyContinue) { try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { } }
 $zipPath = "$outFolder.zip"
 try {
     Compress-Archive -Path $outFolder -DestinationPath $zipPath -Force
@@ -1867,7 +1867,7 @@ catch {
 
 # make sure diagnostic transcript is closed
 if (Get-Command Stop-Transcript -ErrorAction SilentlyContinue) {
-    Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+    try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }
 }
 
 # =========================================================
