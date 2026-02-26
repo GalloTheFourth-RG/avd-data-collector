@@ -1575,6 +1575,7 @@ else {
     Write-Host "  Step $stepNum of $totalSteps`: Log Analytics Queries" -ForegroundColor Cyan
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
     Write-Host ""
+    # We'll initialize the progress bar after computing the total below once we know how many queries will run
 
     $queryStart = (Get-Date).AddDays(-$MetricsLookbackDays)
     $queryEnd   = Get-Date
@@ -1624,6 +1625,9 @@ else {
     $script:laProcessed = 0
     $remainingQueryCount = ($queryDispatchList | Where-Object { $_.Label -ne "CurrentWindow_TableDiscovery" }).Count
     $laTotal = (SafeCount $LogAnalyticsWorkspaceResourceIds) * $remainingQueryCount
+
+    # initialize KQL progress now that laTotal is set
+    if ($laTotal -gt 0) { Write-Progress -Activity "Running KQL queries" -Status "0/$laTotal queries" -PercentComplete 0 }
 
     Write-Host "  Dispatching $(SafeCount $queryDispatchList) queries across $(SafeCount $LogAnalyticsWorkspaceResourceIds) workspace(s)" -ForegroundColor Gray
     Write-Host ""
