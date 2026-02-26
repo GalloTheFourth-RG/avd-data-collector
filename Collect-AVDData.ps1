@@ -323,7 +323,7 @@ function Protect-KqlRow {
             '^(UserName|UserPrincipalName|UserId|User|UserDisplayName|ActiveDirectoryUserName)$' {
                 $Row.$($p.Name) = Protect-Username $val; break
             }
-            '^(SessionHostName|_ResourceId|Computer|ComputerName|ResourceId)$' {
+            '^(SessionHostName|_ResourceId|Computer|ComputerName|ResourceId|HostName|HostNameShort)$' {
                 $Row.$($p.Name) = Protect-VMName $val; break
             }
             '^(ClientIP|ClientPublicIP|SourceIP|PrivateIP)$' {
@@ -332,11 +332,22 @@ function Protect-KqlRow {
             '^(SubscriptionId|subscriptionId)$' {
                 $Row.$($p.Name) = Protect-SubscriptionId $val; break
             }
-            '^(HostPool|HostPoolName)$' {
+            '^(HostPool|HostPoolName|PoolName)$' {
                 $Row.$($p.Name) = Protect-HostPoolName $val; break
             }
             '^(ResourceGroup|ResourceGroupName)$' {
                 $Row.$($p.Name) = Protect-ResourceGroup $val; break
+            }
+            '^(Hosts)$' {
+                # Array of VM names (e.g. make_set(SessionHostName)) — scrub entirely
+                $Row.$($p.Name) = '[SCRUBBED]'; break
+            }
+            '^(Message|ErrorMsg|Error|ErrorMessage|SampleError|SampleErrors|SampleMessages|UpgradeErrorMsg|SampleSuccessMsg|SessionHostHealthCheckResult)$' {
+                # Freeform text fields may contain VM names, UPNs, IPs, resource IDs
+                $Row.$($p.Name) = '[SCRUBBED]'; break
+            }
+            '^(WorkspaceResourceId)$' {
+                $Row.$($p.Name) = Protect-ArmId $val; break
             }
         }
     }
@@ -671,7 +682,7 @@ function Invoke-LaQuery {
             Label               = $Label
             QueryName           = "Meta"
             Status              = "InvalidWorkspaceId"
-            Error               = "Could not extract RG or workspace name from ID: $WorkspaceResourceId"
+            Error               = "Could not extract RG or workspace name from workspace resource ID"
             RowCount            = 0
         }
     }
@@ -2027,6 +2038,10 @@ if (Get-Command Stop-Transcript -ErrorAction SilentlyContinue) { try { Stop-Tran
 # Remove checkpoint and internal files before archiving (they're internal bookkeeping)
 Get-ChildItem -Path $outFolder -Filter '_checkpoint_*.json' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 Get-ChildItem -Path $outFolder -Filter '_raw-vm-ids.json' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+# Diagnostic log contains raw Write-Host output with unscrubbed identifiers — remove when PII scrubbing
+if ($ScrubPII) {
+    Get-ChildItem -Path $outFolder -Filter 'diagnostic.log' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+}
 
 $zipPath = "$outFolder.zip"
 try {
