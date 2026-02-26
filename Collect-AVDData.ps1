@@ -328,6 +328,11 @@ $resourceTags = [System.Collections.Generic.List[object]]::new()
 # Track all AVD resource groups across subscriptions (SubId|RGName → $true)
 $avdResourceGroups = @{}
 
+# Nerdio Manager detection (runs on raw data before PII scrubbing)
+$nerdioDetected = $false
+$nerdioSignals = [System.Collections.Generic.List[string]]::new()
+$nerdioManagedPools = @{}  # raw HostPoolName → $true
+
 # Raw subnet-to-subscription lookup for network topology (survives PII scrubbing)
 # Key = raw subnet ARM ID, Value = @{ SubId = ...; VmCount = 0 }
 $rawSubnetLookup = @{}
@@ -1320,6 +1325,17 @@ foreach ($subId in $SubscriptionIds) {
                 $rawSubnetLookup[$nicSubnetId].VmCount++
             }
 
+            # Nerdio Manager detection: check VM tags for NMW_*, Nerdio_*, NerdioManager* (before scrubbing)
+            $rawTags = SafeProp $vm 'Tags'
+            if ($rawTags -and $rawTags -is [System.Collections.IDictionary]) {
+                $nerdioTagKeys = @($rawTags.Keys | Where-Object { $_ -match '^(NMW_|Nerdio_|NerdioManager|nmw-)' })
+                if ($nerdioTagKeys.Count -gt 0) {
+                    if (-not $nerdioDetected) { $nerdioSignals.Add("VM tags: VMs have Nerdio management tags (NMW_*/Nerdio_*)") }
+                    $nerdioDetected = $true
+                    if ($hpName) { $nerdioManagedPools[$hpName] = $true }
+                }
+            }
+
             $vms.Add([PSCustomObject]@{
                 SubscriptionId       = Protect-SubscriptionId $subId
                 ResourceGroup        = Protect-ResourceGroup $hpRgForVm
@@ -2300,6 +2316,51 @@ if ($hasExtendedCollection) {
     Write-Host "  Extended collection complete" -ForegroundColor Green
     Write-Host ""
 } # end hasExtendedCollection
+
+# ── Nerdio Manager Detection (additional signals from RG/HP naming) ──
+# Signal: Resource group naming — Nerdio creates RGs with patterns like nmw-*, nerdio-*
+$allCollectedRGs = @(($vms | ForEach-Object { SafeProp $_ 'ResourceGroup' } | Where-Object { $_ }) + ($hostPools | ForEach-Object { SafeProp $_ 'ResourceGroup' } | Where-Object { $_ })) | Select-Object -Unique
+# When ScrubPII is active, RG names are hashed — check raw RG names from avdResourceGroups keys instead
+$nerdioRGNames = @()
+if (-not $ScrubPII) {
+    $nerdioRGNames = @($allCollectedRGs | Where-Object { $_ -match '^(nmw-|nerdio-)' })
+} else {
+    # avdResourceGroups keys are "SubId|RGName" with raw names
+    $nerdioRGNames = @($avdResourceGroups.Keys | ForEach-Object { ($_ -split '\|', 2)[1] } | Where-Object { $_ -match '^(nmw-|nerdio-)' })
+}
+if ($nerdioRGNames.Count -gt 0) {
+    $nerdioDetected = $true
+    $nerdioSignals.Add("Resource groups: $($nerdioRGNames.Count) RG(s) match Nerdio naming pattern")
+}
+
+# Signal: Host pool naming — contains nerdio/NMW/nmw- (uses raw names stored in $rawHostPoolIds values or keys)
+# $rawHostPoolIds maps scrubbed HP name → raw ARM ID, so we extract raw HP names from the ARM IDs
+$rawHpNames = @($rawHostPoolIds.Values | ForEach-Object { if ($_) { ($_ -split '/')[-1] } } | Where-Object { $_ })
+$nerdioNamedPools = @($rawHpNames | Where-Object { $_ -match 'nerdio|NMW|nmw-' })
+if ($nerdioNamedPools.Count -gt 0) {
+    $nerdioDetected = $true
+    $nerdioSignals.Add("Host pool naming: $($nerdioNamedPools.Count) pool(s) reference Nerdio in name")
+    foreach ($np in $nerdioNamedPools) { $nerdioManagedPools[$np] = $true }
+}
+
+# If Nerdio detected but no specific pools tagged, assume all pools are managed
+if ($nerdioDetected -and $nerdioManagedPools.Count -eq 0) {
+    foreach ($rawHpId in $rawHostPoolIds.Values) {
+        if ($rawHpId) { $nerdioManagedPools[($rawHpId -split '/')[-1]] = $true }
+    }
+}
+
+# Export nerdio-state.json (uses scrubbed pool names so EP can match)
+$nerdioExportPools = @($nerdioManagedPools.Keys | ForEach-Object { Protect-HostPoolName $_ })
+$nerdioState = @{
+    Detected     = $nerdioDetected
+    Signals      = @($nerdioSignals)
+    ManagedPools = $nerdioExportPools
+}
+$nerdioState | ConvertTo-Json -Depth 3 -Compress | Out-File -FilePath (Join-Path $outFolder 'nerdio-state.json') -Encoding UTF8
+if ($nerdioDetected) {
+    Write-Host "  Nerdio Manager detected — $($nerdioExportPools.Count) managed pool(s)" -ForegroundColor Cyan
+}
 
 # Save Step 1 checkpoint + incremental data
 Export-PackJson -FileName 'host-pools.json' -Data $hostPools
