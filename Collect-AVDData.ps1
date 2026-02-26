@@ -808,9 +808,7 @@ function Expand-ScalingPlanEvidence {
 # =========================================================
 Write-Host ""
 if ($ScrubPII) {
-    Write-Host "  ╔═══════════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║  PII SCRUBBING ENABLED — identifiers will be anonymized      ║" -ForegroundColor Magenta
-    Write-Host "  ╚═══════════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
+    Write-Host "  [PII SCRUBBING ENABLED] identifiers will be anonymized" -ForegroundColor Magenta
     Write-Host ""
 }
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
