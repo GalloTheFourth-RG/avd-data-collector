@@ -1682,6 +1682,7 @@ else {
         $safePropBody = (Get-Item "Function:\SafeProp").ScriptBlock.ToString()
         $safeArrayBody = (Get-Item "Function:\SafeArray").ScriptBlock.ToString()
 
+        # run each query in parallel but emit a progress token so the caller can update the bar
         $remainingQueries | ForEach-Object -Parallel {
             $kq    = $_
             $wsId  = $using:wsId
@@ -1710,17 +1711,16 @@ else {
                     RowCount            = 0
                 })
             }
-            finally {
-                # increment global counter and update progress
-                $newCount = [System.Threading.Interlocked]::Increment([ref]$global:laProcessed)
-                try {
-                    $pct = [math]::Round(($newCount / $using:laTotal) * 100)
-                    Write-Progress -Activity "Running KQL queries" -Status "$newCount/$using:laTotal queries" -PercentComplete $pct
-                } catch { }
-            }
-        } -ThrottleLimit $KqlParallel
-
-        # after workspace queries finish we no longer need to bump the counter here
+            # signal one query completed
+            [PSCustomObject]@{ Progress = 1 }
+        } -ThrottleLimit $KqlParallel | ForEach-Object {
+            # update progress on the main thread
+            $script:laProcessed += $_.Progress
+            try {
+                $pct = [math]::Round(($script:laProcessed / $laTotal) * 100)
+                Write-Progress -Activity "Running KQL queries" -Status "$script:laProcessed/$laTotal queries" -PercentComplete $pct
+            } catch { }
+        }
 
         foreach ($item in $kqlCollected) {
             if ($ScrubPII) {
