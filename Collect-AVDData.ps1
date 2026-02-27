@@ -11,7 +11,7 @@
 
     The output is compatible with the Enhanced AVD Evidence Pack for offline analysis.
 
-    Version: 1.1.0
+    Version: 1.1.1
 .PARAMETER TenantId
     Azure AD / Entra ID tenant ID
 .PARAMETER SubscriptionIds
@@ -234,14 +234,36 @@ if (-not (Get-Command SafeArmProp -ErrorAction SilentlyContinue)) {
     function SafeArmProp {
         param([object]$Obj, [string]$Name)
         if ($null -eq $Obj) { return $null }
+        # Direct property
         if ($Obj.PSObject.Properties.Name -contains $Name) { return $Obj.$Name }
+        # Case-insensitive direct check (some module versions return camelCase e.g. hostPoolType)
+        $match = $Obj.PSObject.Properties | Where-Object { $_.Name -ieq $Name } | Select-Object -First 1
+        if ($match) { return $match.Value }
+        # .Properties nesting
         if ($Obj.PSObject.Properties.Name -contains 'Properties') {
             $p = $Obj.Properties
             if ($null -ne $p -and $p.PSObject.Properties.Name -contains $Name) { return $p.$Name }
+            if ($null -ne $p) {
+                $pm = $p.PSObject.Properties | Where-Object { $_.Name -ieq $Name } | Select-Object -First 1
+                if ($pm) { return $pm.Value }
+            }
+            # Double-nested: .Properties.properties (REST API envelope)
+            if ($null -ne $p -and $p.PSObject.Properties.Name -contains 'properties') {
+                $pp = $p.properties
+                if ($null -ne $pp) {
+                    $ppm = $pp.PSObject.Properties | Where-Object { $_.Name -ieq $Name } | Select-Object -First 1
+                    if ($ppm) { return $ppm.Value }
+                }
+            }
         }
+        # .ResourceProperties nesting
         if ($Obj.PSObject.Properties.Name -contains 'ResourceProperties') {
             $rp = $Obj.ResourceProperties
             if ($null -ne $rp -and $rp.PSObject.Properties.Name -contains $Name) { return $rp.$Name }
+            if ($null -ne $rp) {
+                $rpm = $rp.PSObject.Properties | Where-Object { $_.Name -ieq $Name } | Select-Object -First 1
+                if ($rpm) { return $rpm.Value }
+            }
         }
         return $null
     }
@@ -281,7 +303,7 @@ if (-not (Get-Command Get-SubFromArmId -ErrorAction SilentlyContinue)) {
 $WarningPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$script:ScriptVersion = "1.1.0"
+$script:ScriptVersion = "1.1.1"
 $script:SchemaVersion = "2.0"
 
 # Initialize main collection containers
