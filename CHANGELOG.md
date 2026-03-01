@@ -2,6 +2,22 @@
 
 All notable changes to the AVD Data Collector will be documented in this file.
 
+## [1.2.0] — 2026-06-18
+
+### Added
+- **CustomRdpProperty security flags** — Host pool objects now include `ScreenCaptureProtection`, `Watermarking`, and `SsoEnabled` boolean properties extracted from `CustomRdpProperty` before PII scrubbing. This fixes a 10-point security score penalty when using `-ScrubPII` (screen capture + watermarking checks no longer fail on `[SCRUBBED]` strings)
+- **Incident window KQL queries** — When `-IncludeIncidentWindow` is set, 5 key KQL queries are now dispatched for the incident time range (`IncidentWindow_WVDConnections`, `IncidentWindow_WVDPeakConcurrency`, `IncidentWindow_ProfileLoadPerformance`, `IncidentWindow_ConnectionErrors`, `IncidentWindow_ConnectionQuality`). Previously only Azure Monitor metrics were collected for incident windows
+- **Subnet enrichment** — Subnet analysis objects now include `HostPools` (which host pools have VMs in the subnet), `IsPrivateSubnet` (no NAT gateway, no public IP, has NSG/route table), `HasLoadBalancer`, and `HasPublicIP` properties
+
+### Changed
+- **Property naming alignment** — Collector output properties now match EP expectations directly, reducing normalization overhead:
+  - `SessionHostCount` → `SessionHostVMs` (subnet analysis)
+  - `IsFslogix` → `IsFSLogixLikely` (storage analysis)
+  - `TotalCost` → `MonthlyEstimate` (infra cost data, values now rounded to 2 decimal places)
+  - `IsCustomDns` → `DnsType` (VNet analysis, now `Custom` or `Azure Default` string)
+  - `DisconnectedPeerings` → `DisconnectedPeers` (VNet analysis)
+- Schema version remains 2.0 (backward compatible — EP normalizer handles both old and new property names)
+
 ## [1.1.0] — 2025-06-14
 
 ### Added

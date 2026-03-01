@@ -11,7 +11,7 @@
 
     The output is compatible with the Enhanced AVD Evidence Pack for offline analysis.
 
-    Version: 1.1.1
+    Version: 1.2.0
 .PARAMETER TenantId
     Azure AD / Entra ID tenant ID
 .PARAMETER SubscriptionIds
@@ -303,7 +303,7 @@ if (-not (Get-Command Get-SubFromArmId -ErrorAction SilentlyContinue)) {
 $WarningPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$script:ScriptVersion = "1.1.1"
+$script:ScriptVersion = "1.2.0"
 $script:SchemaVersion = "2.0"
 
 # Initialize main collection containers
@@ -1111,6 +1111,10 @@ foreach ($subId in $SubscriptionIds) {
         if (-not $hpId) { $hpId = Get-ArmIdSafe $hp }
         $hpRg = if ($hpId) { ($hpId -split '/')[4] } else { "" }
 
+        # Extract security-relevant RDP flags BEFORE PII scrubbing so they survive anonymization
+        $rawRdpProperty = SafeArmProp $hp 'CustomRdpProperty'
+        $rdpStr = if ($rawRdpProperty) { "$rawRdpProperty" } else { "" }
+
         $hostPools.Add([PSCustomObject]@{
             SubscriptionId       = Protect-SubscriptionId $subId
             ResourceGroup        = Protect-ResourceGroup $hpRg
@@ -1122,7 +1126,10 @@ foreach ($subId in $SubscriptionIds) {
             PreferredAppGroupType = SafeArmProp $hp 'PreferredAppGroupType'
             Location             = $hp.Location
             ValidationEnv        = SafeArmProp $hp 'ValidationEnvironment'
-            CustomRdpProperty    = $(if ($ScrubPII) { '[SCRUBBED]' } else { SafeArmProp $hp 'CustomRdpProperty' })
+            CustomRdpProperty    = $(if ($ScrubPII) { '[SCRUBBED]' } else { $rawRdpProperty })
+            ScreenCaptureProtection = [bool]($rdpStr -match 'screencaptureprotected:i:[12]')
+            Watermarking         = [bool]($rdpStr -match 'watermarkingquality:i:[123]')
+            SsoEnabled           = [bool]($rdpStr -match 'enablerdsaadauth:i:1')
             Id                   = Protect-ArmId $hpId
         })
 
@@ -1353,9 +1360,10 @@ foreach ($subId in $SubscriptionIds) {
             # Track raw subnet IDs for network topology (before PII scrubbing)
             if ($nicSubnetId) {
                 if (-not $rawSubnetLookup.ContainsKey($nicSubnetId)) {
-                    $rawSubnetLookup[$nicSubnetId] = @{ SubId = $subId; VmCount = 0 }
+                    $rawSubnetLookup[$nicSubnetId] = @{ SubId = $subId; VmCount = 0; HostPools = @{} }
                 }
                 $rawSubnetLookup[$nicSubnetId].VmCount++
+                if ($hpName) { $rawSubnetLookup[$nicSubnetId].HostPools[$hpName] = $true }
             }
 
             # Nerdio Manager detection: check VM tags for NMW_*, Nerdio_*, NerdioManager* (before scrubbing)
@@ -1790,12 +1798,12 @@ if ($hasExtendedCollection) {
                                 $infraProps = SafeProp $infraResult 'properties'
                                 foreach ($row in SafeArray (SafeProp $infraProps 'rows')) {
                                     $infraCostData.Add([PSCustomObject]@{
-                                        SubscriptionId = Protect-SubscriptionId $subId
-                                        ResourceGroup  = Protect-ResourceGroup $rgName
-                                        ResourceType   = [string]$row[1]
-                                        MeterCategory  = [string]$row[2]
-                                        TotalCost      = [double]$row[0]
-                                        Currency       = "USD"
+                                        SubscriptionId  = Protect-SubscriptionId $subId
+                                        ResourceGroup   = Protect-ResourceGroup $rgName
+                                        ResourceType    = [string]$row[1]
+                                        MeterCategory   = [string]$row[2]
+                                        MonthlyEstimate = [math]::Round([double]$row[0], 2)
+                                        Currency        = "USD"
                                     })
                                 }
                                 # Paginate infra cost
@@ -1807,12 +1815,12 @@ if ($hasExtendedCollection) {
                                         $infraNlProps = SafeProp $infraNlResult 'properties'
                                         foreach ($row in SafeArray (SafeProp $infraNlProps 'rows')) {
                                             $infraCostData.Add([PSCustomObject]@{
-                                                SubscriptionId = Protect-SubscriptionId $subId
-                                                ResourceGroup  = Protect-ResourceGroup $rgName
-                                                ResourceType   = [string]$row[1]
-                                                MeterCategory  = [string]$row[2]
-                                                TotalCost      = [double]$row[0]
-                                                Currency       = "USD"
+                                                SubscriptionId  = Protect-SubscriptionId $subId
+                                                ResourceGroup   = Protect-ResourceGroup $rgName
+                                                ResourceType    = [string]$row[1]
+                                                MeterCategory   = [string]$row[2]
+                                                MonthlyEstimate = [math]::Round([double]$row[0], 2)
+                                                Currency        = "USD"
                                             })
                                         }
                                         $infraNextLink = SafeProp $infraNlProps 'nextLink'
@@ -1842,7 +1850,7 @@ if ($hasExtendedCollection) {
             foreach ($sId in $rawSubnetLookup.Keys) {
                 $entry = $rawSubnetLookup[$sId]
                 if ($entry.SubId -eq $subId) {
-                    $uniqueSubnets[$sId] = @{ VmCount = $entry.VmCount }
+                    $uniqueSubnets[$sId] = @{ VmCount = $entry.VmCount; HostPools = $entry.HostPools }
                 }
             }
 
@@ -1884,25 +1892,50 @@ if ($hasExtendedCollection) {
                     # Track raw NSG IDs for evaluation
                     if ($nsgId -and -not $rawNsgIds.ContainsKey($nsgId)) { $rawNsgIds[$nsgId] = $true }
 
+                    # Subnet enrichment: private subnet detection, load balancer, public IP
+                    $isPrivateSubnet = $false
+                    $hasLoadBalancer = $false
+                    $hasPublicIP     = $false
+
+                    # Check IP configurations for load balancer and public IP associations
+                    $ipConfigs = SafeArray (SafeProp $subnet 'IpConfigurations')
+                    foreach ($ipCfg in $ipConfigs) {
+                        $ipCfgId = SafeProp $ipCfg 'Id'
+                        if ($ipCfgId -match '/loadBalancers/') { $hasLoadBalancer = $true }
+                        if ($ipCfgId -match '/publicIPAddresses/') { $hasPublicIP = $true }
+                    }
+
+                    # A subnet is "private" if it has no NAT gateway, no public IP, and has an NSG or route table
+                    # (i.e., no direct outbound internet path — likely uses forced tunneling or private connectivity)
+                    $isPrivateSubnet = (-not $hasNatGw -and -not $hasPublicIP -and ($hasRt -or $hasNsg))
+
+                    # Host pools using this subnet (PII-scrubbed if needed)
+                    $subnetHostPools = @($uniqueSubnets[$subnetId].HostPools.Keys | ForEach-Object { Protect-HostPoolName $_ })
+                    $hostPoolsStr = ($subnetHostPools | Sort-Object) -join "; "
+
                     $subnetAnalysis.Add([PSCustomObject]@{
-                        SubscriptionId = Protect-SubscriptionId $subId
-                        SubnetId       = Protect-SubnetId $subnetId
-                        SubnetName     = Protect-SubnetName $subnetName
-                        VNetName       = Protect-Value -Value $vnetName -Prefix "VNet" -Length 4
-                        AddressPrefix  = $addrPrefix
-                        CIDR           = $cidr
-                        TotalIPs       = [int]$totalIps
-                        UsableIPs      = [int]$usableIps
-                        UsedIPs        = $usedIps
-                        AvailableIPs   = [int]$availIps
-                        UsagePct       = $usagePct
-                        HasNSG         = $hasNsg
-                        NsgId          = Protect-ArmId $nsgId
-                        HasRouteTable  = $hasRt
-                        RouteTableId   = Protect-ArmId $rtId
-                        HasNatGateway  = $hasNatGw
-                        NatGatewayId   = Protect-ArmId $natGwId
-                        SessionHostCount = $uniqueSubnets[$subnetId].VmCount
+                        SubscriptionId   = Protect-SubscriptionId $subId
+                        SubnetId         = Protect-SubnetId $subnetId
+                        SubnetName       = Protect-SubnetName $subnetName
+                        VNetName         = Protect-Value -Value $vnetName -Prefix "VNet" -Length 4
+                        AddressPrefix    = $addrPrefix
+                        CIDR             = $cidr
+                        TotalIPs         = [int]$totalIps
+                        UsableIPs        = [int]$usableIps
+                        UsedIPs          = $usedIps
+                        AvailableIPs     = [int]$availIps
+                        UsagePct         = $usagePct
+                        HasNSG           = $hasNsg
+                        NsgId            = Protect-ArmId $nsgId
+                        HasRouteTable    = $hasRt
+                        RouteTableId     = Protect-ArmId $rtId
+                        HasNatGateway    = $hasNatGw
+                        NatGatewayId     = Protect-ArmId $natGwId
+                        SessionHostVMs   = $uniqueSubnets[$subnetId].VmCount
+                        HostPools        = $hostPoolsStr
+                        IsPrivateSubnet  = $isPrivateSubnet
+                        HasLoadBalancer  = $hasLoadBalancer
+                        HasPublicIP      = $hasPublicIP
                     })
                 }
                 catch { Write-Verbose "    ⚠ Subnet analysis error: $($_.Exception.Message)" }
@@ -1919,15 +1952,16 @@ if ($hasExtendedCollection) {
                     $disconnected = @($peerings | Where-Object { $_.PeeringState -ne 'Connected' })
                     $addrSpace = SafeProp $vnet 'AddressSpace'
                     $addrPrefixes = if ($addrSpace) { SafeProp $addrSpace 'AddressPrefixes' } else { @() }
+                    $dnsType = if ((SafeCount $dnsServers) -gt 0) { 'Custom' } else { 'Azure Default' }
                     $vnetAnalysis.Add([PSCustomObject]@{
                         SubscriptionId     = Protect-SubscriptionId $subId
                         VNetName           = Protect-Value -Value $vnet.Name -Prefix "VNet" -Length 4
                         Location           = $vnet.Location
                         AddressSpace       = (($addrPrefixes) -join "; ")
                         DnsServers         = if ($ScrubPII) { "[SCRUBBED]" } else { ($dnsServers -join "; ") }
-                        IsCustomDns        = ((SafeCount $dnsServers) -gt 0)
+                        DnsType            = $dnsType
                         PeeringCount       = SafeCount $peerings
-                        DisconnectedPeerings = SafeCount $disconnected
+                        DisconnectedPeers  = SafeCount $disconnected
                         SubnetCount        = SafeCount (SafeProp $vnet 'Subnets')
                     })
                 }
@@ -2099,7 +2133,7 @@ if ($hasExtendedCollection) {
                                     UsedGB             = $usedGB
                                     UsagePct           = $usagePct
                                     HasPrivateEndpoint = $hasPE
-                                    IsFslogix          = $isFslogix
+                                    IsFSLogixLikely    = $isFslogix
                                     LargeFileShares    = ($sa.LargeFileSharesState -eq "Enabled")
                                     Location           = $sa.PrimaryLocation
                                 }
@@ -2866,6 +2900,81 @@ else {
     Write-Host "  ✓ KQL collection complete: $(SafeCount $laResults) total results" -ForegroundColor Green
     Write-Host ""
 
+    # ── Incident Window KQL Queries (optional) ──
+    if ($IncludeIncidentWindow) {
+        Write-Host "  Collecting incident window KQL queries ($IncidentWindowStart → $IncidentWindowEnd)..." -ForegroundColor Cyan
+
+        $incidentQueryList = @(
+            @{ Label = "IncidentWindow_WVDConnections";         Query = $kqlQueries["kqlWvdConnections"] },
+            @{ Label = "IncidentWindow_WVDPeakConcurrency";     Query = $kqlQueries["kqlPeakConcurrency"] },
+            @{ Label = "IncidentWindow_ProfileLoadPerformance"; Query = $kqlQueries["kqlProfileLoadPerformance"] },
+            @{ Label = "IncidentWindow_ConnectionErrors";       Query = $kqlQueries["kqlConnectionErrors"] },
+            @{ Label = "IncidentWindow_ConnectionQuality";      Query = $kqlQueries["kqlConnectionQuality"] }
+        ) | Where-Object { $null -ne $_.Query }
+
+        if ($incidentQueryList.Count -gt 0) {
+            $incidentQueryStart = $IncidentWindowStart
+            $incidentQueryEnd   = $IncidentWindowEnd
+
+            foreach ($wsId in $LogAnalyticsWorkspaceResourceIds) {
+                # Handle cross-subscription workspace access
+                $wsSubId = Get-SubFromArmId $wsId
+                if ($wsSubId -and $wsSubId -ne $script:currentSubContext) {
+                    try {
+                        Invoke-WithRetry { Set-AzContext -SubscriptionId $wsSubId -TenantId $TenantId -ErrorAction Stop | Out-Null }
+                        $script:currentSubContext = $wsSubId
+                    }
+                    catch { continue }
+                }
+
+                $wsName = Get-NameFromArmId $wsId
+                $wsNameSafe = Protect-Value -Value $wsName -Prefix 'WS' -Length 4
+                Write-Step -Step "KQL" -Message "Incident queries: $wsNameSafe" -Status "Progress"
+
+                $incidentCollectedKql = [System.Collections.Concurrent.ConcurrentBag[object]]::new()
+
+                $incidentQueryList | ForEach-Object -Parallel {
+                    $kq    = $_
+                    $wsId  = $using:wsId
+                    $start = $using:incidentQueryStart
+                    $end   = $using:incidentQueryEnd
+                    $bag   = $using:incidentCollectedKql
+
+                    Set-Item "Function:\Invoke-LaQuery" -Value ([scriptblock]::Create($using:invokeBody))
+                    Set-Item "Function:\SafeProp"       -Value ([scriptblock]::Create($using:safePropBody))
+                    Set-Item "Function:\SafeArray"      -Value ([scriptblock]::Create($using:safeArrayBody))
+
+                    try {
+                        $results = Invoke-LaQuery -WorkspaceResourceId $wsId -Label $kq.Label -Query $kq.Query -StartTime $start -EndTime $end
+                        foreach ($r in @($results)) { $bag.Add($r) }
+                    }
+                    catch {
+                        $bag.Add([PSCustomObject]@{
+                            WorkspaceResourceId = $wsId
+                            Label               = $kq.Label
+                            QueryName           = "Meta"
+                            Status              = "QueryFailed"
+                            Error               = $_.Exception.Message
+                            RowCount            = 0
+                        })
+                    }
+                } -ThrottleLimit $KqlParallel
+
+                foreach ($item in $incidentCollectedKql) {
+                    if ($ScrubPII) {
+                        $item.WorkspaceResourceId = Protect-ArmId $item.WorkspaceResourceId
+                        $null = Protect-KqlRow $item
+                    }
+                    $laResults.Add($item)
+                }
+
+                Write-Step -Step "KQL" -Message "$wsNameSafe — $(SafeCount $incidentCollectedKql) incident results" -Status "Done"
+            }
+
+            Write-Host "  ✓ Incident window KQL complete" -ForegroundColor Green
+            Write-Host ""
+        }
+    }
     # Save Step 3 checkpoint
     Export-PackJson -FileName 'la-results.json' -Data $laResults
     Save-Checkpoint 'step3-kql'
