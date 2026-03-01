@@ -1133,6 +1133,34 @@ foreach ($subId in $SubscriptionIds) {
             Id                   = Protect-ArmId $hpId
         })
 
+        # Collect Scheduled Agent Updates config
+        # Az.DesktopVirtualization v3.x: nested under $hp.AgentUpdate.Type
+        # Az.DesktopVirtualization v4.x+: may flatten to $hp.AgentUpdateType directly
+        $agentUpdate = SafeArmProp $hp 'AgentUpdate'
+        if ($agentUpdate) {
+            $hostPools[-1] | Add-Member -NotePropertyName AgentUpdateType -NotePropertyValue (SafeProp $agentUpdate 'Type') -Force
+            $hostPools[-1] | Add-Member -NotePropertyName AgentUpdateTimeZone -NotePropertyValue (SafeProp $agentUpdate 'MaintenanceWindowTimeZone') -Force
+            $mws = SafeProp $agentUpdate 'MaintenanceWindows'
+            if ($mws) {
+                $mwList = @(foreach ($mw in $mws) { [PSCustomObject]@{ DayOfWeek = SafeProp $mw 'DayOfWeek'; Hour = SafeProp $mw 'Hour' } })
+                $hostPools[-1] | Add-Member -NotePropertyName AgentUpdateMaintWindows -NotePropertyValue $mwList -Force
+            }
+            $hostPools[-1] | Add-Member -NotePropertyName AgentUpdateLocalTime -NotePropertyValue (SafeProp $agentUpdate 'UseSessionHostLocalTime') -Force
+        }
+        # Flattened fallback — newer module versions
+        if (-not ($hostPools[-1].PSObject.Properties['AgentUpdateType'] -and $hostPools[-1].AgentUpdateType)) {
+            $flatType = SafeArmProp $hp 'AgentUpdateType'
+            if ($flatType) {
+                $hostPools[-1] | Add-Member -NotePropertyName AgentUpdateType -NotePropertyValue $flatType -Force
+                $flatTz = SafeArmProp $hp 'AgentUpdateMaintenanceWindowTimeZone'
+                if ($flatTz) { $hostPools[-1] | Add-Member -NotePropertyName AgentUpdateTimeZone -NotePropertyValue $flatTz -Force }
+                $flatWindows = SafeArmProp $hp 'AgentUpdateMaintenanceWindow'
+                if ($flatWindows) { $hostPools[-1] | Add-Member -NotePropertyName AgentUpdateMaintWindows -NotePropertyValue $flatWindows -Force }
+                $flatLocal = SafeArmProp $hp 'AgentUpdateUseSessionHostLocalTime'
+                if ($null -ne $flatLocal) { $hostPools[-1] | Add-Member -NotePropertyName AgentUpdateLocalTime -NotePropertyValue $flatLocal -Force }
+            }
+        }
+
         # Keep raw HP ID for PE/diagnostic lookups (before scrubbing makes it unusable)
         $scrubHpName = Protect-HostPoolName $hpName
         $rawHostPoolIds[$scrubHpName] = $hpId
