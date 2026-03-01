@@ -2231,6 +2231,51 @@ if ($hasExtendedCollection) {
                 }
                 catch { Write-Verbose "    ⚠ Alert rules query failed: $($_.Exception.Message)" }
             }
+
+            # Also check subscription-level Activity Log alerts (Service Health alerts live here)
+            try {
+                $alaUri = "/subscriptions/$subId/providers/Microsoft.Insights/activityLogAlerts?api-version=2020-10-01"
+                $alaResp = Invoke-AzRestMethod -Path $alaUri -Method GET -ErrorAction SilentlyContinue
+                if ($alaResp.StatusCode -eq 200) {
+                    $alaResult = ($alaResp.Content | ConvertFrom-Json).value
+                    foreach ($ala in SafeArray $alaResult) {
+                        $alaProps = SafeProp $ala 'properties'
+                        $alaEnabled = SafeProp $alaProps 'enabled'
+                        $alaDesc = SafeProp $alaProps 'description'
+                        $alaCondition = SafeProp $alaProps 'condition'
+                        $alaAllOf = if ($alaCondition) { SafeProp $alaCondition 'allOf' } else { @() }
+
+                        # Determine if this is a Service Health alert and extract covered services
+                        $isServiceHealth = $false
+                        $coveredServices = @()
+                        foreach ($clause in SafeArray $alaAllOf) {
+                            $field = SafeProp $clause 'field'
+                            $equals = SafeProp $clause 'equals'
+                            $containsAny = SafeProp $clause 'containsAny'
+                            if ($field -eq 'category' -and $equals -eq 'ServiceHealth') {
+                                $isServiceHealth = $true
+                            }
+                            if ($field -like '*impactedServices*' -or $field -like '*ServiceName*') {
+                                if ($containsAny) { $coveredServices += @($containsAny) }
+                                elseif ($equals) { $coveredServices += $equals }
+                            }
+                        }
+
+                        $alertRules.Add([PSCustomObject]@{
+                            SubscriptionId  = Protect-SubscriptionId $subId
+                            ResourceGroup   = if ($ala.id) { Protect-ResourceGroup (($ala.id -split '/')[4]) } else { '' }
+                            AlertName       = $ala.name
+                            Severity        = 'Sev4'
+                            Enabled         = $alaEnabled
+                            Description     = if ($ScrubPII) { '[SCRUBBED]' } else { $alaDesc }
+                            TargetType      = if ($isServiceHealth) { 'ServiceHealth' } else { 'ActivityLogAlert' }
+                            ServicesCovered = ($coveredServices -join ', ')
+                        })
+                    }
+                }
+            }
+            catch { Write-Verbose "    ⚠ Activity log alerts query failed: $($_.Exception.Message)" }
+
             Write-Host "    ✓ Alert rules: $(SafeCount $alertRules) found" -ForegroundColor Green
         }
 
