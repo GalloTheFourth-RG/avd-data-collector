@@ -715,6 +715,7 @@ $nicCacheByRg = @{}
 $vmCacheByRg = @{}
 $vmStatusCacheByRg = @{}
 $vmCacheByName = @{}
+$vmExtCache = @{}           # VMName → List<string> of extension types (batch-fetched via ARM)
 
 # Disk encryption cache
 $script:diskEncCache = @{}
@@ -1096,6 +1097,24 @@ foreach ($subId in $SubscriptionIds) {
                 foreach ($v in $rgVmStatuses) {
                     $vmStatusCacheByRg[$bulkRg][$v.Name] = $v
                 }
+
+                # Batch-fetch VM extensions — Get-AzVM list mode doesn't populate .Extensions
+                try {
+                    $rgExtResources = @(Get-AzResource -ResourceType "Microsoft.Compute/virtualMachines/extensions" `
+                        -ResourceGroupName $bulkRg -ExpandProperties -ErrorAction SilentlyContinue)
+                    foreach ($er in $rgExtResources) {
+                        if ($er.ResourceId -match '/virtualMachines/([^/]+)/extensions/') {
+                            $extVmName = $matches[1]
+                            $extType = $null
+                            try { $extType = $er.Properties.type } catch {}
+                            if (-not $extType) { $extType = ($er.Name -split '/', 2)[1] }
+                            if ($extType) {
+                                if (-not $vmExtCache.ContainsKey($extVmName)) { $vmExtCache[$extVmName] = [System.Collections.Generic.List[string]]::new() }
+                                if ($extType -notin $vmExtCache[$extVmName]) { $vmExtCache[$extVmName].Add($extType) }
+                            }
+                        }
+                    }
+                } catch {}
             }
             catch {
                 Write-Step -Step "VM Cache" -Message "Failed to pre-fetch RG $(Protect-ResourceGroup $bulkRg) — $($_.Exception.Message)" -Status "Warn"
@@ -1227,6 +1246,23 @@ foreach ($subId in $SubscriptionIds) {
                             foreach ($v in $rgVmStatuses) {
                                 $vmStatusCacheByRg[$discoveredRg][$v.Name] = $v
                             }
+                            # Batch-fetch extensions for this newly discovered RG
+                            try {
+                                $rgExtResources = @(Get-AzResource -ResourceType "Microsoft.Compute/virtualMachines/extensions" `
+                                    -ResourceGroupName $discoveredRg -ExpandProperties -ErrorAction SilentlyContinue)
+                                foreach ($er in $rgExtResources) {
+                                    if ($er.ResourceId -match '/virtualMachines/([^/]+)/extensions/') {
+                                        $eVm = $matches[1]
+                                        $eType = $null
+                                        try { $eType = $er.Properties.type } catch {}
+                                        if (-not $eType) { $eType = ($er.Name -split '/', 2)[1] }
+                                        if ($eType) {
+                                            if (-not $vmExtCache.ContainsKey($eVm)) { $vmExtCache[$eVm] = [System.Collections.Generic.List[string]]::new() }
+                                            if ($eType -notin $vmExtCache[$eVm]) { $vmExtCache[$eVm].Add($eType) }
+                                        }
+                                    }
+                                }
+                            } catch {}
                         }
                         $vm = $vmCacheByRg[$discoveredRg][$vmName]
                         $vmStatus = $vmStatusCacheByRg[$discoveredRg][$vmName]
@@ -1356,14 +1392,25 @@ foreach ($subId in $SubscriptionIds) {
             # Identity type
             $identityType = if ($vm.Identity) { SafeProp $vm.Identity 'Type' } else { $null }
 
-            # VM Extensions
+            # VM Extensions — consolidated from VM object + batch ARM cache
             $extensions = SafeArray $vm.Extensions
+            if (-not $extensions -or $extensions.Count -eq 0) {
+                # Fallback: some Az.Compute versions expose extensions under .Resources
+                if ($vm.PSObject.Properties.Name -contains 'Resources' -and $vm.Resources) {
+                    $extensions = SafeArray $vm.Resources
+                }
+            }
             $extTypes = @($extensions | ForEach-Object {
                 $t = SafeProp $_ 'VirtualMachineExtensionType'
                 if (-not $t) { $t = SafeProp $_ 'Type' }
                 if (-not $t) { $t = SafeProp $_ 'ExtensionType' }
                 $t
-            })
+            } | Where-Object { $_ })
+            # Merge batch-fetched extension cache (most reliable for batch scenarios)
+            if ($vmExtCache.ContainsKey($vmName)) {
+                $extTypes = @($extTypes) + @($vmExtCache[$vmName])
+                $extTypes = @($extTypes | Select-Object -Unique)
+            }
 
             $hasAadExtension      = @($extTypes | Where-Object { $_ -match 'AADLoginForWindows|AADIntuneLogin|AADJ' }).Count -gt 0
             $hasAmaAgent          = @($extTypes | Where-Object { $_ -match 'AzureMonitorWindowsAgent|AzureMonitorLinuxAgent|AMA' }).Count -gt 0
