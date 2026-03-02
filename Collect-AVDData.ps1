@@ -2218,47 +2218,52 @@ if ($hasExtendedCollection) {
         # ── Alert Rules ──
         if ($IncludeAlertRules) {
             Write-Host "    Collecting alert rules..." -ForegroundColor Gray
-            foreach ($rgName in $subAvdRgs) {
-                try {
-                    $alertUri = "/subscriptions/$subId/resourceGroups/$rgName/providers/Microsoft.Insights/metricAlerts?api-version=2018-03-01"
-                    $alertResp = Invoke-AzRestMethod -Path $alertUri -Method GET -ErrorAction SilentlyContinue
-                    if ($alertResp.StatusCode -eq 200) {
-                        $alertResult = ($alertResp.Content | ConvertFrom-Json).value
-                        foreach ($alert in SafeArray $alertResult) {
-                            $alertProps = SafeProp $alert 'properties'
-                            $alertScopes = SafeProp $alertProps 'scopes'
-                            $alertRules.Add([PSCustomObject]@{
-                                SubscriptionId = Protect-SubscriptionId $subId
-                                ResourceGroup  = Protect-ResourceGroup $rgName
-                                AlertName      = $alert.name
-                                Severity       = SafeProp $alertProps 'severity'
-                                Enabled        = SafeProp $alertProps 'enabled'
-                                Description    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $alertProps 'description' }
-                                TargetType     = if ($alertScopes) { ($alertScopes | ForEach-Object { ($_ -split '/')[-2] } | Select-Object -First 1) } else { 'Unknown' }
-                            })
-                        }
-                    }
-                    # Also check scheduled query rules (log alerts)
-                    $sqrUri = "/subscriptions/$subId/resourceGroups/$rgName/providers/Microsoft.Insights/scheduledQueryRules?api-version=2023-03-15-preview"
-                    $sqrResp = Invoke-AzRestMethod -Path $sqrUri -Method GET -ErrorAction SilentlyContinue
-                    if ($sqrResp.StatusCode -eq 200) {
-                        $sqrResult = ($sqrResp.Content | ConvertFrom-Json).value
-                        foreach ($sqr in SafeArray $sqrResult) {
-                            $sqrProps = SafeProp $sqr 'properties'
-                            $alertRules.Add([PSCustomObject]@{
-                                SubscriptionId = Protect-SubscriptionId $subId
-                                ResourceGroup  = Protect-ResourceGroup $rgName
-                                AlertName      = $sqr.name
-                                Severity       = SafeProp $sqrProps 'severity'
-                                Enabled        = SafeProp $sqrProps 'enabled'
-                                Description    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $sqrProps 'description' }
-                                TargetType     = "ScheduledQueryRule"
-                            })
-                        }
+            # Query subscription-wide (alerts are often in monitoring RGs, not AVD RGs)
+            try {
+                $alertUri = "/subscriptions/$subId/providers/Microsoft.Insights/metricAlerts?api-version=2018-03-01"
+                $alertResp = Invoke-AzRestMethod -Path $alertUri -Method GET -ErrorAction SilentlyContinue
+                if ($alertResp.StatusCode -eq 200) {
+                    $alertResult = ($alertResp.Content | ConvertFrom-Json).value
+                    foreach ($alert in SafeArray $alertResult) {
+                        $alertProps = SafeProp $alert 'properties'
+                        $alertScopes = SafeProp $alertProps 'scopes'
+                        $alertRg = if ($alert.id) { ($alert.id -split '/')[4] } else { '' }
+                        $alertRules.Add([PSCustomObject]@{
+                            SubscriptionId = Protect-SubscriptionId $subId
+                            ResourceGroup  = Protect-ResourceGroup $alertRg
+                            AlertName      = $alert.name
+                            Severity       = SafeProp $alertProps 'severity'
+                            Enabled        = SafeProp $alertProps 'enabled'
+                            Description    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $alertProps 'description' }
+                            TargetType     = if ($alertScopes) { ($alertScopes | ForEach-Object { ($_ -split '/')[-2] } | Select-Object -First 1) } else { 'Unknown' }
+                        })
                     }
                 }
-                catch { Write-Verbose "    ⚠ Alert rules query failed: $($_.Exception.Message)" }
             }
+            catch { Write-Verbose "    ⚠ Metric alert rules query failed: $($_.Exception.Message)" }
+
+            # Scheduled query rules (log alerts) — also subscription-wide
+            try {
+                $sqrUri = "/subscriptions/$subId/providers/Microsoft.Insights/scheduledQueryRules?api-version=2023-03-15-preview"
+                $sqrResp = Invoke-AzRestMethod -Path $sqrUri -Method GET -ErrorAction SilentlyContinue
+                if ($sqrResp.StatusCode -eq 200) {
+                    $sqrResult = ($sqrResp.Content | ConvertFrom-Json).value
+                    foreach ($sqr in SafeArray $sqrResult) {
+                        $sqrProps = SafeProp $sqr 'properties'
+                        $sqrRg = if ($sqr.id) { ($sqr.id -split '/')[4] } else { '' }
+                        $alertRules.Add([PSCustomObject]@{
+                            SubscriptionId = Protect-SubscriptionId $subId
+                            ResourceGroup  = Protect-ResourceGroup $sqrRg
+                            AlertName      = $sqr.name
+                            Severity       = SafeProp $sqrProps 'severity'
+                            Enabled        = SafeProp $sqrProps 'enabled'
+                            Description    = if ($ScrubPII) { '[SCRUBBED]' } else { SafeProp $sqrProps 'description' }
+                            TargetType     = "ScheduledQueryRule"
+                        })
+                    }
+                }
+            }
+            catch { Write-Verbose "    ⚠ Scheduled query rules query failed: $($_.Exception.Message)" }
 
             # Also check subscription-level Activity Log alerts (Service Health alerts live here)
             try {
