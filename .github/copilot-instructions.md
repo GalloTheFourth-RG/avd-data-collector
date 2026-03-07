@@ -34,6 +34,7 @@ The script **never creates, modifies, or deletes** any Azure resources. This is 
 
 ### Strict Mode
 `Set-StrictMode -Version Latest` — all variables must be initialized, property access on `$null` throws.
+- **Critical**: `Where-Object` results MUST be wrapped in `@()` before calling `.Count`. Without wrapping, a single match returns a scalar (no `.Count`), zero matches returns `$null` (`.Count` throws in strict mode). Always use: `$filtered = @($collection | Where-Object { ... })` then `$filtered.Count`.
 
 ### Error Resilience
 Each collection step is wrapped in try/catch. Missing permissions, unavailable APIs, or empty results produce warnings — never crashes. `$ErrorActionPreference = "Continue"` in collection loops.
