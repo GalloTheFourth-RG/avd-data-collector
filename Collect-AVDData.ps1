@@ -1,8 +1,8 @@
-# PSScriptAnalyzer disable=PSAvoidUsingWriteHost,PSAvoidUsingEmptyCatchBlock,PSUseApprovedVerbs,PSReviewUnusedParameter,PSUseBOMForUnicodeEncodedFile
+﻿# PSScriptAnalyzer disable=PSAvoidUsingWriteHost,PSAvoidUsingEmptyCatchBlock,PSUseApprovedVerbs,PSReviewUnusedParameter,PSUseBOMForUnicodeEncodedFile
 
 <#
 .SYNOPSIS
-    AVD Data Collector — Open-source data collection for Azure Virtual Desktop
+    AVD Data Collector -- Open-source data collection for Azure Virtual Desktop
 
 .DESCRIPTION
     Collects ARM resource inventory, Azure Monitor metrics, and Log Analytics (KQL)
@@ -131,7 +131,7 @@ param(
     [string]$OutputPath = "."
 )  # MetricsParallel and KqlParallel control ForEach-Object throttling (default 15,5)
 
-# ── Expand -IncludeAllExtended ──
+# -- Expand -IncludeAllExtended --
 if ($IncludeAllExtended) {
     $IncludeCostData           = $true
     $IncludeNetworkTopology    = $true
@@ -306,6 +306,9 @@ $ErrorActionPreference = "Stop"
 $script:ScriptVersion = "1.2.0"
 $script:SchemaVersion = "2.0"
 
+# Embedded KQL queries (populated by build.ps1, empty when running from source)
+$script:EmbeddedKqlQueries = @{}
+
 # Initialize main collection containers
 $hostPools = [System.Collections.Generic.List[object]]::new()
 $sessionHosts = [System.Collections.Generic.List[object]]::new()
@@ -345,13 +348,13 @@ $activityLogEntries = [System.Collections.Generic.List[object]]::new()
 $policyAssignments = [System.Collections.Generic.List[object]]::new()
 $resourceTags = [System.Collections.Generic.List[object]]::new()
 
-# Track all AVD resource groups across subscriptions (SubId|RGName → $true)
+# Track all AVD resource groups across subscriptions (SubId|RGName -> $true)
 $avdResourceGroups = @{}
 
 # Nerdio Manager detection (runs on raw data before PII scrubbing)
 $nerdioDetected = $false
 $nerdioSignals = [System.Collections.Generic.List[string]]::new()
-$nerdioManagedPools = @{}  # raw HostPoolName → $true
+$nerdioManagedPools = @{}  # raw HostPoolName -> $true
 
 # Raw subnet-to-subscription lookup for network topology (survives PII scrubbing)
 # Key = raw subnet ARM ID, Value = @{ SubId = ...; VmCount = 0 }
@@ -483,7 +486,7 @@ function Protect-KqlRow {
                 $Row.$($p.Name) = Protect-ResourceGroup $val; break
             }
             '^(Hosts)$' {
-                # Array of VM names (e.g. make_set(SessionHostName)) — scrub entirely
+                # Array of VM names (e.g. make_set(SessionHostName)) -- scrub entirely
                 $Row.$($p.Name) = '[SCRUBBED]'; break
             }
             '^(Message|ErrorMsg|Error|ErrorMessage|SampleError|SampleErrors|SampleMessages|UpgradeErrorMsg|SampleSuccessMsg|SessionHostHealthCheckResult)$' {
@@ -502,12 +505,12 @@ function Protect-KqlRow {
 # Prerequisite Validation
 # =========================================================
 Write-Host ""
-Write-Host "╔═══════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║                                                                       ║" -ForegroundColor Cyan
-Write-Host "║              AVD Data Collector — v$($script:ScriptVersion)                              ║" -ForegroundColor Cyan
-Write-Host "║              Open-Source Data Collection for Azure Virtual Desktop    ║" -ForegroundColor Cyan
-Write-Host "║                                                                       ║" -ForegroundColor Cyan
-Write-Host "╚═══════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "+=======================================================================+" -ForegroundColor Cyan
+Write-Host "|                                                                       |" -ForegroundColor Cyan
+Write-Host "|              AVD Data Collector -- v$($script:ScriptVersion)                              |" -ForegroundColor Cyan
+Write-Host "|              Open-Source Data Collection for Azure Virtual Desktop    |" -ForegroundColor Cyan
+Write-Host "|                                                                       |" -ForegroundColor Cyan
+Write-Host "+=======================================================================+" -ForegroundColor Cyan
 Write-Host ""
 
 Write-Host "Validating prerequisites..." -ForegroundColor Cyan
@@ -529,10 +532,10 @@ foreach ($module in $requiredModules) {
 
     if (-not $installed) {
         $missingModules += $module.Name
-        Write-Host "  ✗ Missing: $($module.Name) (>= $($module.MinVersion))" -ForegroundColor Red
+        Write-Host "  [X] Missing: $($module.Name) (>= $($module.MinVersion))" -ForegroundColor Red
     }
     else {
-        Write-Host "  ✓ Found: $($module.Name) v$($installed.Version)" -ForegroundColor Green
+        Write-Host "  [OK] Found: $($module.Name) v$($installed.Version)" -ForegroundColor Green
     }
 }
 
@@ -552,9 +555,9 @@ if ($IncludeReservedInstances) {
     $azResModule = Get-Module -ListAvailable -Name 'Az.Reservations' | Select-Object -First 1
     if ($azResModule) {
         $script:hasAzReservations = $true
-        Write-Host "  ✓ Optional: Az.Reservations v$($azResModule.Version)" -ForegroundColor Green
+        Write-Host "  [OK] Optional: Az.Reservations v$($azResModule.Version)" -ForegroundColor Green
     } else {
-        Write-Host "  ⚠ Az.Reservations module not installed — cannot collect Reserved Instances" -ForegroundColor Yellow
+        Write-Host "  [WARN] Az.Reservations module not installed -- cannot collect Reserved Instances" -ForegroundColor Yellow
         Write-Host "    Install with: Install-Module -Name Az.Reservations -Scope CurrentUser -Force" -ForegroundColor Gray
         Write-Host "    Also requires Reservations Reader role at the tenant or enrollment level" -ForegroundColor Gray
     }
@@ -565,9 +568,9 @@ $script:hasAzNetwork = $false
 $azNetModule = Get-Module -ListAvailable -Name 'Az.Network' | Select-Object -First 1
 if ($azNetModule) {
     $script:hasAzNetwork = $true
-    Write-Host "  ✓ Found: Az.Network v$($azNetModule.Version)" -ForegroundColor Green
+    Write-Host "  [OK] Found: Az.Network v$($azNetModule.Version)" -ForegroundColor Green
 } else {
-    Write-Host "  ⚠ Az.Network not installed — NIC/IP data and network topology will be limited" -ForegroundColor Yellow
+    Write-Host "  [WARN] Az.Network not installed -- NIC/IP data and network topology will be limited" -ForegroundColor Yellow
     Write-Host "    Install with: Install-Module -Name Az.Network -Scope CurrentUser -Force" -ForegroundColor Gray
 }
 
@@ -577,9 +580,9 @@ if ($IncludeStorageAnalysis) {
     $azStorageModule = Get-Module -ListAvailable -Name 'Az.Storage' | Select-Object -First 1
     if ($azStorageModule) {
         $script:hasAzStorage = $true
-        Write-Host "  ✓ Optional: Az.Storage v$($azStorageModule.Version)" -ForegroundColor Green
+        Write-Host "  [OK] Optional: Az.Storage v$($azStorageModule.Version)" -ForegroundColor Green
     } else {
-        Write-Host "  ⚠ Az.Storage not installed — cannot collect FSLogix storage data" -ForegroundColor Yellow
+        Write-Host "  [WARN] Az.Storage not installed -- cannot collect FSLogix storage data" -ForegroundColor Yellow
         Write-Host "    Install with: Install-Module -Name Az.Storage -Scope CurrentUser -Force" -ForegroundColor Gray
     }
 }
@@ -602,7 +605,7 @@ if (-not $existingContext -or -not $existingContext.Account) {
     }
     catch {
         Write-Host ""
-        Write-Host "  ✗ Azure login failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "  [X] Azure login failed: $($_.Exception.Message)" -ForegroundColor Red
         Write-Host ""
         Write-Host "  Run this command first, then re-run the collector:" -ForegroundColor Yellow
         Write-Host "    Connect-AzAccount -TenantId '$(Protect-TenantId $TenantId)'" -ForegroundColor White
@@ -610,7 +613,7 @@ if (-not $existingContext -or -not $existingContext.Account) {
         exit 1
     }
 } elseif ($existingContext.Tenant.Id -ne $TenantId) {
-    Write-Host "  ⚠ Current session is for tenant $(Protect-TenantId $existingContext.Tenant.Id) — switching to $(Protect-TenantId $TenantId)" -ForegroundColor Yellow
+    Write-Host "  [WARN] Current session is for tenant $(Protect-TenantId $existingContext.Tenant.Id) -- switching to $(Protect-TenantId $TenantId)" -ForegroundColor Yellow
     try {
         Disable-AzContextAutosave -Scope Process -ErrorAction SilentlyContinue | Out-Null
         Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
@@ -618,7 +621,7 @@ if (-not $existingContext -or -not $existingContext.Account) {
         $existingContext = Get-AzContext
     }
     catch {
-        Write-Host "  ✗ Failed to switch tenant: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "  [X] Failed to switch tenant: $($_.Exception.Message)" -ForegroundColor Red
         exit 1
     }
 }
@@ -629,7 +632,7 @@ try {
     $availableSubs = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop)
 }
 catch {
-    Write-Host "  ⚠ Session token expired — re-authenticating..." -ForegroundColor Yellow
+    Write-Host "  [WARN] Session token expired -- re-authenticating..." -ForegroundColor Yellow
     try {
         Disable-AzContextAutosave -Scope Process -ErrorAction SilentlyContinue | Out-Null
         Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue | Out-Null
@@ -637,7 +640,7 @@ catch {
         $availableSubs = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop)
     }
     catch {
-        Write-Host "  ✗ Authentication failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "  [X] Authentication failed: $($_.Exception.Message)" -ForegroundColor Red
         Write-Host "    Run: Connect-AzAccount -TenantId '$(Protect-TenantId $TenantId)'" -ForegroundColor White
         exit 1
     }
@@ -645,13 +648,13 @@ catch {
 
 $isManagedIdentity = $existingContext -and $existingContext.Account.Type -eq 'ManagedService'
 if ($isManagedIdentity) {
-    Write-Host "  ✓ Authenticated via Managed Identity" -ForegroundColor Green
+    Write-Host "  [OK] Authenticated via Managed Identity" -ForegroundColor Green
 } else {
-    Write-Host "  ✓ Authenticated as: $(Protect-Email $existingContext.Account.Id)" -ForegroundColor Green
+    Write-Host "  [OK] Authenticated as: $(Protect-Email $existingContext.Account.Id)" -ForegroundColor Green
 }
 Write-Host "    Tenant: $(Protect-TenantId $TenantId)" -ForegroundColor Gray
 
-# ── Subscription access pre-flight ──
+# -- Subscription access pre-flight --
 Write-Host ""
 Write-Host "Validating subscription access..." -ForegroundColor Cyan
 $availableSubIds = @($availableSubs | ForEach-Object { $_.Id })
@@ -659,44 +662,44 @@ $subsFailed = @()
 foreach ($subId in $SubscriptionIds) {
     if ($subId -notin $availableSubIds) {
         $subsFailed += $subId
-        Write-Host "  ✗ Subscription $(Protect-SubscriptionId $subId) — not accessible with this account" -ForegroundColor Red
+        Write-Host "  [X] Subscription $(Protect-SubscriptionId $subId) -- not accessible with this account" -ForegroundColor Red
         $closestMatch = $availableSubs | Where-Object { $_.Name -match 'vdi|avd|desktop' -or $_.Id -like "$($subId.Substring(0,8))*" } | Select-Object -First 1
         if ($closestMatch) {
             Write-Host "    Did you mean: $(Protect-SubscriptionId $closestMatch.Id)?" -ForegroundColor Yellow
         }
     } else {
-        Write-Host "  ✓ $(Protect-SubscriptionId $subId)" -ForegroundColor Green
+        Write-Host "  [OK] $(Protect-SubscriptionId $subId)" -ForegroundColor Green
     }
 }
 
 if ($subsFailed.Count -eq $SubscriptionIds.Count) {
     Write-Host ""
-    Write-Host "  ✗ None of the specified subscriptions are accessible." -ForegroundColor Red
+    Write-Host "  [X] None of the specified subscriptions are accessible." -ForegroundColor Red
     Write-Host "    Available subscriptions in this tenant:" -ForegroundColor Gray
     foreach ($s in ($availableSubs | Select-Object -First 10)) {
-        Write-Host "      • $(Protect-Value -Value $s.Name -Prefix 'Sub' -Length 4) ($(Protect-SubscriptionId $s.Id))" -ForegroundColor Gray
+        Write-Host "      * $(Protect-Value -Value $s.Name -Prefix 'Sub' -Length 4) ($(Protect-SubscriptionId $s.Id))" -ForegroundColor Gray
     }
     if ($availableSubs.Count -gt 10) { Write-Host "      ... and $($availableSubs.Count - 10) more" -ForegroundColor Gray }
     Write-Host ""
     exit 1
 } elseif ($subsFailed.Count -gt 0) {
     Write-Host ""
-    Write-Host "  ⚠ $($subsFailed.Count) subscription(s) not accessible — they will be skipped" -ForegroundColor Yellow
+    Write-Host "  [WARN] $($subsFailed.Count) subscription(s) not accessible -- they will be skipped" -ForegroundColor Yellow
 }
 
-# ── Log Analytics workspace ID format validation ──
+# -- Log Analytics workspace ID format validation --
 if ($LogAnalyticsWorkspaceResourceIds.Count -gt 0 -and -not $SkipLogAnalyticsQueries) {
     Write-Host ""
     Write-Host "Validating workspace resource IDs..." -ForegroundColor Cyan
     foreach ($wsId in $LogAnalyticsWorkspaceResourceIds) {
         $wsParts = ($wsId.TrimEnd('/') -split '/')
         if ($wsParts.Count -lt 9 -or $wsId -notmatch 'Microsoft\.OperationalInsights/workspaces') {
-            Write-Host "  ⚠ Invalid workspace resource ID format:" -ForegroundColor Yellow
+            Write-Host "  [WARN] Invalid workspace resource ID format:" -ForegroundColor Yellow
             Write-Host "    $(Protect-ArmId $wsId)" -ForegroundColor Gray
             Write-Host "    Expected: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<name>" -ForegroundColor Gray
         } else {
             $wsName = $wsParts[8]
-            Write-Host "  ✓ $(Protect-Value -Value $wsName -Prefix 'WS' -Length 4)" -ForegroundColor Green
+            Write-Host "  [OK] $(Protect-Value -Value $wsName -Prefix 'WS' -Length 4)" -ForegroundColor Green
         }
     }
 }
@@ -715,7 +718,7 @@ $nicCacheByRg = @{}
 $vmCacheByRg = @{}
 $vmStatusCacheByRg = @{}
 $vmCacheByName = @{}
-$vmExtCache = @{}           # VMName → List<string> of extension types (batch-fetched via ARM)
+$vmExtCache = @{}           # VMName -> List<string> of extension types (batch-fetched via ARM)
 
 # Disk encryption cache
 $script:diskEncCache = @{}
@@ -753,7 +756,7 @@ function Export-PackJson {
     $filePath = Join-Path $outFolder $FileName
     $Data | ConvertTo-Json -Depth 10 -Compress | Out-File -FilePath $filePath -Encoding UTF8
     $count = if ($Data -is [System.Collections.ICollection]) { $Data.Count } else { @($Data).Count }
-    Write-Host "    ✓ $FileName — $count items" -ForegroundColor Green
+    Write-Host "    [OK] $FileName -- $count items" -ForegroundColor Green
 }
 
 # Resuming from a previous partial run?
@@ -793,9 +796,14 @@ try {
 # =========================================================
 # KQL Query Loading
 # =========================================================
-$queriesDir = Join-Path $PSScriptRoot "queries"
+# @@INJECT:KQL_QUERIES@@
 $kqlQueries = @{}
-if (Test-Path $queriesDir) {
+$queriesDir = Join-Path $PSScriptRoot "queries"
+if ($script:EmbeddedKqlQueries.Count -gt 0) {
+    $kqlQueries = $script:EmbeddedKqlQueries
+    Write-Host "Loaded $($kqlQueries.Count) embedded KQL queries" -ForegroundColor Gray
+}
+elseif (Test-Path $queriesDir) {
     Get-ChildItem -Path $queriesDir -Filter "*.kql" | ForEach-Object {
         $varName = $_.BaseName
         $kqlQueries[$varName] = Get-Content $_.FullName -Raw
@@ -803,7 +811,7 @@ if (Test-Path $queriesDir) {
     Write-Host "Loaded $($kqlQueries.Count) KQL queries from queries/" -ForegroundColor Gray
 }
 else {
-    Write-Host "  ⚠ queries/ directory not found — KQL queries will be skipped" -ForegroundColor Yellow
+    Write-Host "  [WARN] queries/ directory not found -- KQL queries will be skipped" -ForegroundColor Yellow
     $SkipLogAnalyticsQueries = $true
 }
 
@@ -986,9 +994,9 @@ $subsProcessed = 0
 $subsSkipped = @()
 
 if ($script:isResume -and (Test-Checkpoint 'step1-arm')) {
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-    Write-Host "  Step 1: ARM Resources — RESUMED (loading from checkpoint)" -ForegroundColor Yellow
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
+    Write-Host "  Step 1: ARM Resources -- RESUMED (loading from checkpoint)" -ForegroundColor Yellow
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host ""
     Import-StepData -FileName 'host-pools.json' -Target $hostPools
     Import-StepData -FileName 'session-hosts.json' -Target $sessionHosts
@@ -1021,9 +1029,9 @@ if ($script:isResume -and (Test-Checkpoint 'step1-arm')) {
     Write-Host ""
 }
 else {
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "  Step 1 of $(if ($SkipAzureMonitorMetrics) { '3' } else { '4' }): Collecting ARM Resources" -ForegroundColor Cyan
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host ""
 
 foreach ($subId in $SubscriptionIds) {
@@ -1052,7 +1060,7 @@ foreach ($subId in $SubscriptionIds) {
             }
         }
 
-        # ── Host Pools ──
+        # -- Host Pools --
         Write-Step -Step "Host Pools" -Message "Enumerating..." -Status "Progress"
     }
     catch {
@@ -1064,7 +1072,7 @@ foreach ($subId in $SubscriptionIds) {
         Write-Step -Step "Host Pools" -Message "No host pools found in this subscription" -Status "Warn"
     }
 
-    # ── Bulk VM Pre-Fetch (per RG) ──
+    # -- Bulk VM Pre-Fetch (per RG) --
     # Collect unique RGs from host pools, batch-fetch VMs
     $hpResourceGroups = @()
     foreach ($hp in SafeArray $hpObjs) {
@@ -1098,7 +1106,7 @@ foreach ($subId in $SubscriptionIds) {
                     $vmStatusCacheByRg[$bulkRg][$v.Name] = $v
                 }
 
-                # Batch-fetch VM extensions — Get-AzVM list mode doesn't populate .Extensions
+                # Batch-fetch VM extensions -- Get-AzVM list mode doesn't populate .Extensions
                 try {
                     $rgExtResources = @(Get-AzResource -ResourceType "Microsoft.Compute/virtualMachines/extensions" `
                         -ResourceGroupName $bulkRg -ExpandProperties -ErrorAction SilentlyContinue)
@@ -1117,12 +1125,12 @@ foreach ($subId in $SubscriptionIds) {
                 } catch {}
             }
             catch {
-                Write-Step -Step "VM Cache" -Message "Failed to pre-fetch RG $(Protect-ResourceGroup $bulkRg) — $($_.Exception.Message)" -Status "Warn"
+                Write-Step -Step "VM Cache" -Message "Failed to pre-fetch RG $(Protect-ResourceGroup $bulkRg) -- $($_.Exception.Message)" -Status "Warn"
             }
         }
     }
 
-    # ── Process Host Pools ──
+    # -- Process Host Pools --
     foreach ($hp in SafeArray $hpObjs) {
         $hpName = SafeArmProp $hp 'Name'
         if (-not $hpName) { $hpName = $hp.Name }
@@ -1166,7 +1174,7 @@ foreach ($subId in $SubscriptionIds) {
             }
             $hostPools[-1] | Add-Member -NotePropertyName AgentUpdateLocalTime -NotePropertyValue (SafeProp $agentUpdate 'UseSessionHostLocalTime') -Force
         }
-        # Flattened fallback — newer module versions
+        # Flattened fallback -- newer module versions
         if (-not ($hostPools[-1].PSObject.Properties['AgentUpdateType'] -and $hostPools[-1].AgentUpdateType)) {
             $flatType = SafeArmProp $hp 'AgentUpdateType'
             if ($flatType) {
@@ -1191,7 +1199,7 @@ foreach ($subId in $SubscriptionIds) {
             $shObjs = @(Get-AzWvdSessionHost -ResourceGroupName $hpRg -HostPoolName $hpName -ErrorAction SilentlyContinue)
         }
         catch {
-            Write-Step -Step "Session Hosts" -Message "Failed for $(Protect-HostPoolName $hpName) — $($_.Exception.Message)" -Status "Warn"
+            Write-Step -Step "Session Hosts" -Message "Failed for $(Protect-HostPoolName $hpName) -- $($_.Exception.Message)" -Status "Warn"
         }
 
         foreach ($sh in $shObjs) {
@@ -1215,7 +1223,7 @@ foreach ($subId in $SubscriptionIds) {
                 LastHeartBeat     = SafeArmProp $sh 'LastHeartBeat'
             })
 
-            # ── Resolve backing VM ──
+            # -- Resolve backing VM --
             $vm = $null
             $vmStatus = $null
 
@@ -1392,7 +1400,7 @@ foreach ($subId in $SubscriptionIds) {
             # Identity type
             $identityType = if ($vm.Identity) { SafeProp $vm.Identity 'Type' } else { $null }
 
-            # VM Extensions — consolidated from VM object + batch ARM cache
+            # VM Extensions -- consolidated from VM object + batch ARM cache
             $extensions = SafeArray $vm.Extensions
             if (-not $extensions -or $extensions.Count -eq 0) {
                 # Fallback: some Az.Compute versions expose extensions under .Resources
@@ -1495,7 +1503,7 @@ foreach ($subId in $SubscriptionIds) {
         }
     }
 
-    # ── Application Groups ──
+    # -- Application Groups --
     Write-Step -Step "App Groups" -Message "Enumerating..." -Status "Progress"
     try {
         $agObjs = Get-AzWvdApplicationGroup -ErrorAction SilentlyContinue
@@ -1516,10 +1524,10 @@ foreach ($subId in $SubscriptionIds) {
         }
     }
     catch {
-        Write-Step -Step "App Groups" -Message "Failed — $($_.Exception.Message)" -Status "Warn"
+        Write-Step -Step "App Groups" -Message "Failed -- $($_.Exception.Message)" -Status "Warn"
     }
 
-    # ── Scaling Plans ──
+    # -- Scaling Plans --
     Write-Step -Step "Scaling Plans" -Message "Enumerating..." -Status "Progress"
     try {
         $spObjs = Invoke-WithRetry { Get-AzResource -ResourceType "Microsoft.DesktopVirtualization/scalingPlans" -ExpandProperties -ErrorAction SilentlyContinue }
@@ -1528,10 +1536,10 @@ foreach ($subId in $SubscriptionIds) {
         }
     }
     catch {
-        Write-Step -Step "Scaling Plans" -Message "Failed — $($_.Exception.Message)" -Status "Warn"
+        Write-Step -Step "Scaling Plans" -Message "Failed -- $($_.Exception.Message)" -Status "Warn"
     }
 
-    # ── VM Scale Sets ──
+    # -- VM Scale Sets --
     Write-Step -Step "VMSS" -Message "Enumerating..." -Status "Progress"
     try {
         $vmssResources = Get-AzVmss -ErrorAction SilentlyContinue
@@ -1580,15 +1588,15 @@ foreach ($subId in $SubscriptionIds) {
                 }
             }
             catch {
-                Write-Step -Step "VMSS Instances" -Message "Failed for $(Protect-Value -Value $vmssName -Prefix 'VMSS' -Length 4) — $($_.Exception.Message)" -Status "Warn"
+                Write-Step -Step "VMSS Instances" -Message "Failed for $(Protect-Value -Value $vmssName -Prefix 'VMSS' -Length 4) -- $($_.Exception.Message)" -Status "Warn"
             }
         }
     }
     catch {
-        Write-Step -Step "VMSS" -Message "Failed — $($_.Exception.Message)" -Status "Warn"
+        Write-Step -Step "VMSS" -Message "Failed -- $($_.Exception.Message)" -Status "Warn"
     }
 
-    # ── Capacity Reservation Groups (optional) ──
+    # -- Capacity Reservation Groups (optional) --
     if ($IncludeCapacityReservations) {
         Write-Step -Step "Capacity Reservations" -Message "Enumerating..." -Status "Progress"
         try {
@@ -1647,11 +1655,11 @@ foreach ($subId in $SubscriptionIds) {
             }
         }
         catch {
-            Write-Step -Step "Capacity Reservations" -Message "Failed — $($_.Exception.Message)" -Status "Warn"
+            Write-Step -Step "Capacity Reservations" -Message "Failed -- $($_.Exception.Message)" -Status "Warn"
         }
     }
 
-    Write-Step -Step "Subscription $subsProcessed" -Message "Done — $(SafeCount $vms) VMs so far" -Status "Done"
+    Write-Step -Step "Subscription $subsProcessed" -Message "Done -- $(SafeCount $vms) VMs so far" -Status "Done"
 }
 
 Write-Host ""
@@ -1677,12 +1685,12 @@ foreach ($hp in $hostPools) {
 $hasExtendedCollection = $IncludeCostData -or $IncludeNetworkTopology -or $IncludeStorageAnalysis -or $IncludeOrphanedResources -or $IncludeDiagnosticSettings -or $IncludeAlertRules -or $IncludeActivityLog -or $IncludePolicyAssignments -or $IncludeResourceTags -or $IncludeImageAnalysis
 
 if ($hasExtendedCollection) {
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host "  Step 1b: Extended Data Collection" -ForegroundColor Cyan
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host ""
 
-    # ── Resource Tags ──
+    # -- Resource Tags --
     if ($IncludeResourceTags) {
         Write-Host "  Collecting resource tags..." -ForegroundColor Gray
         foreach ($v in $vms) {
@@ -1713,7 +1721,7 @@ if ($hasExtendedCollection) {
                 }
             }
         }
-        Write-Host "  ✓ Tags: $(SafeCount $resourceTags) tag entries" -ForegroundColor Green
+        Write-Host "  [OK] Tags: $(SafeCount $resourceTags) tag entries" -ForegroundColor Green
     }
 
     # Iterate per subscription for API-bound collections
@@ -1727,7 +1735,7 @@ if ($hasExtendedCollection) {
                 $script:currentSubContext = $subId
             }
             catch {
-                Write-Step -Step "Extended" -Message "Cannot switch to $(Protect-SubscriptionId $subId) — skipping" -Status "Warn"
+                Write-Step -Step "Extended" -Message "Cannot switch to $(Protect-SubscriptionId $subId) -- skipping" -Status "Warn"
                 continue
             }
         }
@@ -1735,9 +1743,9 @@ if ($hasExtendedCollection) {
         $subAvdRgs = @($avdResourceGroups.Keys | Where-Object { $_.StartsWith("$subId|".ToLower()) } | ForEach-Object { ($_ -split '\|', 2)[1] })
         if ($subAvdRgs.Count -eq 0) { continue }
 
-        Write-Step -Step "Extended" -Message "Subscription $(Protect-SubscriptionId $subId) — $($subAvdRgs.Count) AVD RGs" -Status "Progress"
+        Write-Step -Step "Extended" -Message "Subscription $(Protect-SubscriptionId $subId) -- $($subAvdRgs.Count) AVD RGs" -Status "Progress"
 
-        # ── Cost Management ──
+        # -- Cost Management --
         if ($IncludeCostData) {
             try {
                 Write-Host "    Querying Cost Management..." -ForegroundColor Gray
@@ -1758,7 +1766,7 @@ if ($hasExtendedCollection) {
                 
                 if ($testResp.StatusCode -ne 200) {
                     $costAccessDenied.Add($subId)
-                    Write-Host "    ⚠ Cost Management access denied (need Cost Management Reader)" -ForegroundColor Yellow
+                    Write-Host "    [WARN] Cost Management access denied (need Cost Management Reader)" -ForegroundColor Yellow
                 } else {
                     $costAccessGranted.Add($subId)
 
@@ -1848,7 +1856,7 @@ if ($hasExtendedCollection) {
                         }
                     }
 
-                    # Infrastructure costs — non-VM resources in AVD RGs
+                    # Infrastructure costs -- non-VM resources in AVD RGs
                     foreach ($rgName in $subAvdRgs) {
                         try {
                             $infraBody = @{
@@ -1903,18 +1911,18 @@ if ($hasExtendedCollection) {
                                 }
                             }
                         }
-                        catch { Write-Verbose "    ⚠ Infra cost query failed for RG: $($_.Exception.Message)" }
+                        catch { Write-Verbose "    [WARN] Infra cost query failed for RG: $($_.Exception.Message)" }
                     }
 
-                    Write-Host "    ✓ Cost data: $(SafeCount $actualCostData) entries, $(($vmActualMonthlyCost.Keys).Count) VMs with costs" -ForegroundColor Green
+                    Write-Host "    [OK] Cost data: $(SafeCount $actualCostData) entries, $(($vmActualMonthlyCost.Keys).Count) VMs with costs" -ForegroundColor Green
                 }
             }
             catch {
-                Write-Host "    ⚠ Cost Management query failed: $($_.Exception.Message)" -ForegroundColor Yellow
+                Write-Host "    [WARN] Cost Management query failed: $($_.Exception.Message)" -ForegroundColor Yellow
             }
         }
 
-        # ── Network Topology ──
+        # -- Network Topology --
         if ($IncludeNetworkTopology -and $script:hasAzNetwork) {
             Write-Host "    Collecting network topology..." -ForegroundColor Gray
             $vnetCache = @{}
@@ -1981,7 +1989,7 @@ if ($hasExtendedCollection) {
                     }
 
                     # A subnet is "private" if it has no NAT gateway, no public IP, and has an NSG or route table
-                    # (i.e., no direct outbound internet path — likely uses forced tunneling or private connectivity)
+                    # (i.e., no direct outbound internet path -- likely uses forced tunneling or private connectivity)
                     $isPrivateSubnet = (-not $hasNatGw -and -not $hasPublicIP -and ($hasRt -or $hasNsg))
 
                     # Host pools using this subnet (PII-scrubbed if needed)
@@ -2013,7 +2021,7 @@ if ($hasExtendedCollection) {
                         HasPublicIP      = $hasPublicIP
                     })
                 }
-                catch { Write-Verbose "    ⚠ Subnet analysis error: $($_.Exception.Message)" }
+                catch { Write-Verbose "    [WARN] Subnet analysis error: $($_.Exception.Message)" }
             }
 
             # VNet DNS and peering analysis
@@ -2040,7 +2048,7 @@ if ($hasExtendedCollection) {
                         SubnetCount        = SafeCount (SafeProp $vnet 'Subnets')
                     })
                 }
-                catch { Write-Verbose "    ⚠ VNet analysis error for ${vnetKey}: $($_.Exception.Message)" }
+                catch { Write-Verbose "    [WARN] VNet analysis error for ${vnetKey}: $($_.Exception.Message)" }
             }
 
             # Private endpoint check per host pool
@@ -2056,7 +2064,7 @@ if ($hasExtendedCollection) {
                         Status           = if ($peConns.Count -gt 0) { ($peConns[0].PrivateLinkServiceConnectionState.Status ?? "Unknown") } else { "None" }
                     })
                 }
-                catch { Write-Verbose "    ⚠ Private endpoint check failed: $($_.Exception.Message)" }
+                catch { Write-Verbose "    [WARN] Private endpoint check failed: $($_.Exception.Message)" }
             }
 
             # NSG rule evaluation
@@ -2093,13 +2101,13 @@ if ($hasExtendedCollection) {
                         }
                     }
                 }
-                catch { Write-Verbose "    ⚠ NSG evaluation error: $($_.Exception.Message)" }
+                catch { Write-Verbose "    [WARN] NSG evaluation error: $($_.Exception.Message)" }
             }
 
-            Write-Host "    ✓ Network: $(SafeCount $subnetAnalysis) subnets, $(SafeCount $vnetAnalysis) VNets, $(SafeCount $privateEndpointFindings) PE checks, $(SafeCount $nsgRuleFindings) risky NSG rules" -ForegroundColor Green
+            Write-Host "    [OK] Network: $(SafeCount $subnetAnalysis) subnets, $(SafeCount $vnetAnalysis) VNets, $(SafeCount $privateEndpointFindings) PE checks, $(SafeCount $nsgRuleFindings) risky NSG rules" -ForegroundColor Green
         }
 
-        # ── Orphaned Resources ──
+        # -- Orphaned Resources --
         if ($IncludeOrphanedResources) {
             Write-Host "    Scanning for orphaned resources..." -ForegroundColor Gray
             foreach ($rgName in $subAvdRgs) {
@@ -2155,13 +2163,13 @@ if ($hasExtendedCollection) {
                     }
                 }
                 catch {
-                    Write-Step -Step "Orphaned" -Message "Failed for $(Protect-ResourceGroup $rgName) — $($_.Exception.Message)" -Status "Warn"
+                    Write-Step -Step "Orphaned" -Message "Failed for $(Protect-ResourceGroup $rgName) -- $($_.Exception.Message)" -Status "Warn"
                 }
             }
-            Write-Host "    ✓ Orphaned resources: $(SafeCount $orphanedResources) found" -ForegroundColor Green
+            Write-Host "    [OK] Orphaned resources: $(SafeCount $orphanedResources) found" -ForegroundColor Green
         }
 
-        # ── FSLogix Storage Analysis ──
+        # -- FSLogix Storage Analysis --
         if ($IncludeStorageAnalysis -and $script:hasAzStorage) {
             Write-Host "    Collecting storage data..." -ForegroundColor Gray
             foreach ($rgName in $subAvdRgs) {
@@ -2178,7 +2186,7 @@ if ($hasExtendedCollection) {
                                     $shareUsage = Get-AzRmStorageShare -StorageAccount $sa -Name $shareName -GetShareUsage -ErrorAction SilentlyContinue
                                     $usedBytes = if ($shareUsage.ShareUsageBytes) { $shareUsage.ShareUsageBytes } else { 0 }
                                 }
-                                catch { Write-Verbose "    ⚠ Share usage query failed: $($_.Exception.Message)" }
+                                catch { Write-Verbose "    [WARN] Share usage query failed: $($_.Exception.Message)" }
 
                                 $shareProps = SafeProp $share 'ShareProperties'
                     $quotaGB = if ($shareProps) { SafeProp $shareProps 'QuotaInGiB' } else { 0 }
@@ -2192,7 +2200,7 @@ if ($hasExtendedCollection) {
                                     $peConns = @(Get-AzPrivateEndpointConnection -PrivateLinkResourceId $sa.Id -ErrorAction SilentlyContinue)
                                     $hasPE = ($peConns.Count -gt 0)
                                 }
-                                catch { Write-Verbose "    ⚠ Storage PE check failed: $($_.Exception.Message)" }
+                                catch { Write-Verbose "    [WARN] Storage PE check failed: $($_.Exception.Message)" }
 
                                 $isFslogix = $shareName -match 'fslogix|profile|odfc|msix'
 
@@ -2217,17 +2225,17 @@ if ($hasExtendedCollection) {
                                 if ($isFslogix) { $fslogixShares.Add($entry) }
                             }
                         }
-                        catch { Write-Verbose "    ⚠ Storage account error: $($_.Exception.Message)" }
+                        catch { Write-Verbose "    [WARN] Storage account error: $($_.Exception.Message)" }
                     }
                 }
                 catch {
-                    Write-Step -Step "Storage" -Message "Failed for $(Protect-ResourceGroup $rgName) — $($_.Exception.Message)" -Status "Warn"
+                    Write-Step -Step "Storage" -Message "Failed for $(Protect-ResourceGroup $rgName) -- $($_.Exception.Message)" -Status "Warn"
                 }
             }
-            Write-Host "    ✓ Storage: $(SafeCount $fslogixStorageAnalysis) shares ($(SafeCount $fslogixShares) FSLogix)" -ForegroundColor Green
+            Write-Host "    [OK] Storage: $(SafeCount $fslogixStorageAnalysis) shares ($(SafeCount $fslogixShares) FSLogix)" -ForegroundColor Green
         }
 
-        # ── Diagnostic Settings ──
+        # -- Diagnostic Settings --
         if ($IncludeDiagnosticSettings) {
             Write-Host "    Collecting diagnostic settings..." -ForegroundColor Gray
             # Check host pools
@@ -2257,12 +2265,12 @@ if ($hasExtendedCollection) {
                         WorkspaceTargets = ($workspaceTargets -join "; ")
                     })
                 }
-                catch { Write-Verbose "    ⚠ Diagnostic settings check failed: $($_.Exception.Message)" }
+                catch { Write-Verbose "    [WARN] Diagnostic settings check failed: $($_.Exception.Message)" }
             }
-            Write-Host "    ✓ Diagnostic settings: $(SafeCount $diagnosticSettings) resources checked" -ForegroundColor Green
+            Write-Host "    [OK] Diagnostic settings: $(SafeCount $diagnosticSettings) resources checked" -ForegroundColor Green
         }
 
-        # ── Alert Rules ──
+        # -- Alert Rules --
         if ($IncludeAlertRules) {
             Write-Host "    Collecting alert rules..." -ForegroundColor Gray
             # Query subscription-wide (alerts are often in monitoring RGs, not AVD RGs)
@@ -2287,9 +2295,9 @@ if ($hasExtendedCollection) {
                     }
                 }
             }
-            catch { Write-Verbose "    ⚠ Metric alert rules query failed: $($_.Exception.Message)" }
+            catch { Write-Verbose "    [WARN] Metric alert rules query failed: $($_.Exception.Message)" }
 
-            # Scheduled query rules (log alerts) — also subscription-wide
+            # Scheduled query rules (log alerts) -- also subscription-wide
             try {
                 $sqrUri = "/subscriptions/$subId/providers/Microsoft.Insights/scheduledQueryRules?api-version=2023-03-15-preview"
                 $sqrResp = Invoke-AzRestMethod -Path $sqrUri -Method GET -ErrorAction SilentlyContinue
@@ -2310,7 +2318,7 @@ if ($hasExtendedCollection) {
                     }
                 }
             }
-            catch { Write-Verbose "    ⚠ Scheduled query rules query failed: $($_.Exception.Message)" }
+            catch { Write-Verbose "    [WARN] Scheduled query rules query failed: $($_.Exception.Message)" }
 
             # Also check subscription-level Activity Log alerts (Service Health alerts live here)
             try {
@@ -2354,12 +2362,12 @@ if ($hasExtendedCollection) {
                     }
                 }
             }
-            catch { Write-Verbose "    ⚠ Activity log alerts query failed: $($_.Exception.Message)" }
+            catch { Write-Verbose "    [WARN] Activity log alerts query failed: $($_.Exception.Message)" }
 
-            Write-Host "    ✓ Alert rules: $(SafeCount $alertRules) found" -ForegroundColor Green
+            Write-Host "    [OK] Alert rules: $(SafeCount $alertRules) found" -ForegroundColor Green
         }
 
-        # ── Activity Log ──
+        # -- Activity Log --
         if ($IncludeActivityLog) {
             Write-Host "    Collecting activity log (last 7 days)..." -ForegroundColor Gray
             $actStart = (Get-Date).AddDays(-7)
@@ -2382,13 +2390,13 @@ if ($hasExtendedCollection) {
                     }
                 }
                 catch {
-                    Write-Step -Step "Activity Log" -Message "Failed for $(Protect-ResourceGroup $rgName) — $($_.Exception.Message)" -Status "Warn"
+                    Write-Step -Step "Activity Log" -Message "Failed for $(Protect-ResourceGroup $rgName) -- $($_.Exception.Message)" -Status "Warn"
                 }
             }
-            Write-Host "    ✓ Activity log: $(SafeCount $activityLogEntries) entries" -ForegroundColor Green
+            Write-Host "    [OK] Activity log: $(SafeCount $activityLogEntries) entries" -ForegroundColor Green
         }
 
-        # ── Policy Assignments ──
+        # -- Policy Assignments --
         if ($IncludePolicyAssignments) {
             Write-Host "    Collecting policy assignments..." -ForegroundColor Gray
             foreach ($rgName in $subAvdRgs) {
@@ -2411,13 +2419,13 @@ if ($hasExtendedCollection) {
                         }
                     }
                 }
-                catch { Write-Verbose "    ⚠ Policy query failed: $($_.Exception.Message)" }
+                catch { Write-Verbose "    [WARN] Policy query failed: $($_.Exception.Message)" }
             }
-            Write-Host "    ✓ Policy assignments: $(SafeCount $policyAssignments) found" -ForegroundColor Green
+            Write-Host "    [OK] Policy assignments: $(SafeCount $policyAssignments) found" -ForegroundColor Green
         }
     } # end per-subscription extended collection
 
-    # ── Image Analysis (post-loop, uses collected VM data) ──
+    # -- Image Analysis (post-loop, uses collected VM data) --
     if ($IncludeImageAnalysis) {
         Write-Host "  Collecting image version data..." -ForegroundColor Gray
         
@@ -2450,7 +2458,7 @@ if ($hasExtendedCollection) {
                     VMCount        = $info.Count
                 })
             }
-            catch { Write-Verbose "    ⚠ Marketplace image query failed: $($_.Exception.Message)" }
+            catch { Write-Verbose "    [WARN] Marketplace image query failed: $($_.Exception.Message)" }
         }
 
         # Gallery image analysis
@@ -2498,10 +2506,10 @@ if ($hasExtendedCollection) {
                     VMCount        = $info.Count
                 })
             }
-            catch { Write-Verbose "    ⚠ Gallery image query failed: $($_.Exception.Message)" }
+            catch { Write-Verbose "    [WARN] Gallery image query failed: $($_.Exception.Message)" }
         }
 
-        Write-Host "  ✓ Images: $(SafeCount $marketplaceImageDetails) marketplace SKUs, $(SafeCount $galleryAnalysis) gallery images" -ForegroundColor Green
+        Write-Host "  [OK] Images: $(SafeCount $marketplaceImageDetails) marketplace SKUs, $(SafeCount $galleryAnalysis) gallery images" -ForegroundColor Green
     }
 
     Write-Host ""
@@ -2509,10 +2517,10 @@ if ($hasExtendedCollection) {
     Write-Host ""
 } # end hasExtendedCollection
 
-# ── Nerdio Manager Detection (additional signals from RG/HP naming) ──
-# Signal: Resource group naming — Nerdio creates RGs with patterns like nmw-*, nerdio-*
+# -- Nerdio Manager Detection (additional signals from RG/HP naming) --
+# Signal: Resource group naming -- Nerdio creates RGs with patterns like nmw-*, nerdio-*
 $allCollectedRGs = @(($vms | ForEach-Object { SafeProp $_ 'ResourceGroup' } | Where-Object { $_ }) + ($hostPools | ForEach-Object { SafeProp $_ 'ResourceGroup' } | Where-Object { $_ })) | Select-Object -Unique
-# When ScrubPII is active, RG names are hashed — check raw RG names from avdResourceGroups keys instead
+# When ScrubPII is active, RG names are hashed -- check raw RG names from avdResourceGroups keys instead
 $nerdioRGNames = @()
 if (-not $ScrubPII) {
     $nerdioRGNames = @($allCollectedRGs | Where-Object { $_ -match '^(nmw-|nerdio-)' })
@@ -2525,8 +2533,8 @@ if ($nerdioRGNames.Count -gt 0) {
     $nerdioSignals.Add("Resource groups: $($nerdioRGNames.Count) RG(s) match Nerdio naming pattern")
 }
 
-# Signal: Host pool naming — contains nerdio/NMW/nmw- (uses raw names stored in $rawHostPoolIds values or keys)
-# $rawHostPoolIds maps scrubbed HP name → raw ARM ID, so we extract raw HP names from the ARM IDs
+# Signal: Host pool naming -- contains nerdio/NMW/nmw- (uses raw names stored in $rawHostPoolIds values or keys)
+# $rawHostPoolIds maps scrubbed HP name -> raw ARM ID, so we extract raw HP names from the ARM IDs
 $rawHpNames = @($rawHostPoolIds.Values | ForEach-Object { if ($_) { ($_ -split '/')[-1] } } | Where-Object { $_ })
 $nerdioNamedPools = @($rawHpNames | Where-Object { $_ -match 'nerdio|NMW|nmw-' })
 if ($nerdioNamedPools.Count -gt 0) {
@@ -2551,7 +2559,7 @@ $nerdioState = @{
 }
 $nerdioState | ConvertTo-Json -Depth 3 -Compress | Out-File -FilePath (Join-Path $outFolder 'nerdio-state.json') -Encoding UTF8
 if ($nerdioDetected) {
-    Write-Host "  Nerdio Manager detected — $($nerdioExportPools.Count) managed pool(s)" -ForegroundColor Cyan
+    Write-Host "  Nerdio Manager detected -- $($nerdioExportPools.Count) managed pool(s)" -ForegroundColor Cyan
 }
 
 # Save Step 1 checkpoint + incremental data
@@ -2570,7 +2578,7 @@ if ($IncludeCapacityReservations) {
 # Save raw VM identifiers for metrics resume (not included in final pack)
 @{ RawVmIds = @($rawVmIds); RawVmNames = @($rawVmNames) } | ConvertTo-Json -Depth 3 -Compress | Out-File -FilePath (Join-Path $outFolder '_raw-vm-ids.json') -Encoding UTF8
 Save-Checkpoint 'step1-arm'
-Write-Host "  [CHECKPOINT] Step 1 saved — safe to resume from: $outFolder" -ForegroundColor DarkGray
+Write-Host "  [CHECKPOINT] Step 1 saved -- safe to resume from: $outFolder" -ForegroundColor DarkGray
 Write-Host ""
 
 } # end if/else resume step 1
@@ -2579,9 +2587,9 @@ Write-Host ""
 # STEP 2: Collect Azure Monitor Metrics
 # =========================================================
 if ($script:isResume -and (Test-Checkpoint 'step2-metrics')) {
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-    Write-Host "  Step 2: Azure Monitor Metrics — RESUMED (loading from checkpoint)" -ForegroundColor Yellow
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
+    Write-Host "  Step 2: Azure Monitor Metrics -- RESUMED (loading from checkpoint)" -ForegroundColor Yellow
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host ""
     Import-StepData -FileName 'metrics-baseline.json' -Target $vmMetrics
     Import-StepData -FileName 'metrics-incident.json' -Target $vmMetricsIncident
@@ -2589,16 +2597,16 @@ if ($script:isResume -and (Test-Checkpoint 'step2-metrics')) {
     Write-Host ""
 }
 elseif ($SkipAzureMonitorMetrics) {
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-    Write-Host "  Step 2: Azure Monitor Metrics — SKIPPED" -ForegroundColor Yellow
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
+    Write-Host "  Step 2: Azure Monitor Metrics -- SKIPPED" -ForegroundColor Yellow
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host ""
 }
 else {
     $totalSteps = if ($SkipLogAnalyticsQueries) { 3 } else { 4 }
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host "  Step 2 of $totalSteps`: Collecting Azure Monitor Metrics" -ForegroundColor Cyan
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host ""
 
     # Normalize VM IDs: remove empty/whitespace entries and deduplicate
@@ -2759,12 +2767,12 @@ else {
         $vmMetrics.Add($item)
     }
 
-    Write-Host "  ✓ Metrics collected: $(SafeCount $vmMetrics) datapoints for $metricsTotal VMs" -ForegroundColor Green
+    Write-Host "  [OK] Metrics collected: $(SafeCount $vmMetrics) datapoints for $metricsTotal VMs" -ForegroundColor Green
     Write-Host ""
 
-    # ── Incident Window Metrics (optional) ──
+    # -- Incident Window Metrics (optional) --
     if ($IncludeIncidentWindow) {
-        Write-Host "  Collecting incident window metrics ($IncidentWindowStart → $IncidentWindowEnd)..." -ForegroundColor Cyan
+        Write-Host "  Collecting incident window metrics ($IncidentWindowStart -> $IncidentWindowEnd)..." -ForegroundColor Cyan
 
         $incidentCollected = [System.Collections.Concurrent.ConcurrentBag[object]]::new()
 
@@ -2813,7 +2821,7 @@ else {
             $vmMetricsIncident.Add($item)
         }
 
-        Write-Host "  ✓ Incident metrics: $(SafeCount $vmMetricsIncident) datapoints" -ForegroundColor Green
+        Write-Host "  [OK] Incident metrics: $(SafeCount $vmMetricsIncident) datapoints" -ForegroundColor Green
         Write-Host ""
     }
 
@@ -2823,7 +2831,7 @@ else {
         Export-PackJson -FileName 'metrics-incident.json' -Data $vmMetricsIncident
     }
     Save-Checkpoint 'step2-metrics'
-    Write-Host "  [CHECKPOINT] Step 2 saved — safe to resume from: $outFolder" -ForegroundColor DarkGray
+    Write-Host "  [CHECKPOINT] Step 2 saved -- safe to resume from: $outFolder" -ForegroundColor DarkGray
     Write-Host ""
 }
 
@@ -2831,31 +2839,31 @@ else {
 # STEP 3: Log Analytics (KQL) Queries
 # =========================================================
 if ($script:isResume -and (Test-Checkpoint 'step3-kql')) {
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-    Write-Host "  Step 3: KQL Queries — RESUMED (loading from checkpoint)" -ForegroundColor Yellow
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
+    Write-Host "  Step 3: KQL Queries -- RESUMED (loading from checkpoint)" -ForegroundColor Yellow
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host ""
     Import-StepData -FileName 'la-results.json' -Target $laResults
     Write-Host "  KQL data reloaded: $(SafeCount $laResults) results" -ForegroundColor Green
     Write-Host ""
 }
 elseif ($SkipLogAnalyticsQueries -or (SafeCount $LogAnalyticsWorkspaceResourceIds) -eq 0) {
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
     if ($SkipLogAnalyticsQueries) {
-        Write-Host "  Step 3: Log Analytics Queries — SKIPPED (-SkipLogAnalyticsQueries)" -ForegroundColor Yellow
+        Write-Host "  Step 3: Log Analytics Queries -- SKIPPED (-SkipLogAnalyticsQueries)" -ForegroundColor Yellow
     }
     else {
-        Write-Host "  Step 3: Log Analytics Queries — SKIPPED (no workspace IDs provided)" -ForegroundColor Yellow
+        Write-Host "  Step 3: Log Analytics Queries -- SKIPPED (no workspace IDs provided)" -ForegroundColor Yellow
     }
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host ""
 }
 else {
     $totalSteps = if ($SkipAzureMonitorMetrics) { 3 } else { 4 }
     $stepNum = if ($SkipAzureMonitorMetrics) { 2 } else { 3 }
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host "  Step $stepNum of $totalSteps`: Log Analytics Queries" -ForegroundColor Cyan
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host ""
     # We'll initialize the progress bar after computing the total below once we know how many queries will run
 
@@ -2924,7 +2932,7 @@ else {
                 $script:currentSubContext = $wsSubId
             }
             catch {
-                Write-Step -Step "KQL" -Message "Cannot access workspace subscription $(Protect-SubscriptionId $wsSubId) — $($_.Exception.Message)" -Status "Error"
+                Write-Step -Step "KQL" -Message "Cannot access workspace subscription $(Protect-SubscriptionId $wsSubId) -- $($_.Exception.Message)" -Status "Error"
                 continue
             }
         }
@@ -2947,7 +2955,7 @@ else {
 
             $tdStatus = ($tdResult | Where-Object { $_.PSObject.Properties.Name -contains 'Status' } | Select-Object -First 1)
             if ($tdStatus -and $tdStatus.Status -in @("WorkspaceNotFound", "QueryFailed", "InvalidWorkspaceId")) {
-                Write-Step -Step "KQL" -Message "Workspace unreachable ($($tdStatus.Status)) — skipping remaining queries" -Status "Error"
+                Write-Step -Step "KQL" -Message "Workspace unreachable ($($tdStatus.Status)) -- skipping remaining queries" -Status "Error"
                 if ($tdStatus.Status -eq "WorkspaceNotFound") {
                     Write-Host "    Verify the workspace resource ID is correct and that you have Log Analytics Reader access." -ForegroundColor Yellow
                     Write-Host "    Expected format: /subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<name>" -ForegroundColor Gray
@@ -2997,7 +3005,7 @@ else {
             # signal one query completed (only progress tokens should reach the main thread)
             [PSCustomObject]@{ _ProgressToken = $true; Progress = 1 }
         } -ThrottleLimit $KqlParallel | ForEach-Object {
-            # Only process progress tokens — ignore anything else that leaks from parallel runspaces
+            # Only process progress tokens -- ignore anything else that leaks from parallel runspaces
             if ($_.PSObject.Properties['_ProgressToken']) {
                 $global:laProcessed += $_.Progress
                 try {
@@ -3015,19 +3023,19 @@ else {
             $laResults.Add($item)
         }
 
-        Write-Step -Step "KQL" -Message "$wsNameSafe — $(SafeCount $kqlCollected) results collected" -Status "Done"
+        Write-Step -Step "KQL" -Message "$wsNameSafe -- $(SafeCount $kqlCollected) results collected" -Status "Done"
     }
 
     # clear progress display when finished
     if ($laTotal -gt 0) { Write-Progress -Activity "Running KQL queries" -Completed }
 
     Write-Host ""
-    Write-Host "  ✓ KQL collection complete: $(SafeCount $laResults) total results" -ForegroundColor Green
+    Write-Host "  [OK] KQL collection complete: $(SafeCount $laResults) total results" -ForegroundColor Green
     Write-Host ""
 
-    # ── Incident Window KQL Queries (optional) ──
+    # -- Incident Window KQL Queries (optional) --
     if ($IncludeIncidentWindow) {
-        Write-Host "  Collecting incident window KQL queries ($IncidentWindowStart → $IncidentWindowEnd)..." -ForegroundColor Cyan
+        Write-Host "  Collecting incident window KQL queries ($IncidentWindowStart -> $IncidentWindowEnd)..." -ForegroundColor Cyan
 
         $incidentQueryList = @(
             @{ Label = "IncidentWindow_WVDConnections";         Query = $kqlQueries["kqlWvdConnections"] },
@@ -3093,20 +3101,20 @@ else {
                     $laResults.Add($item)
                 }
 
-                Write-Step -Step "KQL" -Message "$wsNameSafe — $(SafeCount $incidentCollectedKql) incident results" -Status "Done"
+                Write-Step -Step "KQL" -Message "$wsNameSafe -- $(SafeCount $incidentCollectedKql) incident results" -Status "Done"
             }
 
-            Write-Host "  ✓ Incident window KQL complete" -ForegroundColor Green
+            Write-Host "  [OK] Incident window KQL complete" -ForegroundColor Green
             Write-Host ""
         }
     }
     # Save Step 3 checkpoint
     Export-PackJson -FileName 'la-results.json' -Data $laResults
     Save-Checkpoint 'step3-kql'
-    Write-Host "  [CHECKPOINT] Step 3 saved — safe to resume from: $outFolder" -ForegroundColor DarkGray
+    Write-Host "  [CHECKPOINT] Step 3 saved -- safe to resume from: $outFolder" -ForegroundColor DarkGray
     Write-Host ""
 
-    # ── Build Diagnostic Readiness from TableDiscovery ──
+    # -- Build Diagnostic Readiness from TableDiscovery --
     # Mirrors the EP's diagnostic readiness structure so the report can show data prerequisites
     $diagnosticReadiness = [System.Collections.Generic.List[object]]::new()
     $discoveredTables = @($laResults | Where-Object { $_.Label -eq "CurrentWindow_TableDiscovery" -and $_.QueryName -eq "AVD" -and $_.PSObject.Properties.Name -contains "Type" })
@@ -3137,7 +3145,7 @@ else {
         Export-PackJson -FileName 'diagnostic-readiness.json' -Data $diagnosticReadiness
         $readyCount = @($diagnosticReadiness | Where-Object { $_.Available }).Count
         $totalCount = $diagnosticReadiness.Count
-        Write-Host "  ✓ Diagnostic readiness: $readyCount/$totalCount data groups available" -ForegroundColor Green
+        Write-Host "  [OK] Diagnostic readiness: $readyCount/$totalCount data groups available" -ForegroundColor Green
         Write-Host ""
     }
 }
@@ -3146,9 +3154,9 @@ else {
 # STEP 4 (optional): Quota Usage
 # =========================================================
 if ($IncludeQuotaUsage) {
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host "  Collecting Quota Usage" -ForegroundColor Cyan
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host ""
 
     $avdRegions = @($vms | Where-Object { $_.Region } | Select-Object -ExpandProperty Region -Unique)
@@ -3187,11 +3195,11 @@ if ($IncludeQuotaUsage) {
             }
         }
         catch {
-            Write-Step -Step "Quota" -Message "Failed for $region — $($_.Exception.Message)" -Status "Warn"
+            Write-Step -Step "Quota" -Message "Failed for $region -- $($_.Exception.Message)" -Status "Warn"
         }
     }
 
-    Write-Host "  ✓ Quota data: $(SafeCount $quotaUsage) entries across $(SafeCount $avdRegions) regions" -ForegroundColor Green
+    Write-Host "  [OK] Quota data: $(SafeCount $quotaUsage) entries across $(SafeCount $avdRegions) regions" -ForegroundColor Green
     Write-Host ""
 }
 
@@ -3199,9 +3207,9 @@ if ($IncludeQuotaUsage) {
 # STEP 5 (optional): Reserved Instances
 # =========================================================
 if ($IncludeReservedInstances -and $script:hasAzReservations) {
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host "  Collecting Reserved Instances" -ForegroundColor Cyan
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host ""
 
     try {
@@ -3220,12 +3228,12 @@ if ($IncludeReservedInstances -and $script:hasAzReservations) {
                 $orderReservations = @(Get-AzReservation -ReservationOrderId $orderId -ErrorAction Stop)
             }
             catch {
-                Write-Host "    ⚠ Could not read order $orderId : $($_.Exception.Message)" -ForegroundColor Yellow
+                Write-Host "    [WARN] Could not read order $orderId : $($_.Exception.Message)" -ForegroundColor Yellow
                 continue
             }
 
             foreach ($res in $orderReservations) {
-                # Defensive property extraction — Az.Reservations objects vary by module version
+                # Defensive property extraction -- Az.Reservations objects vary by module version
                 $skuName = $null
                 if ($res.PSObject.Properties['Sku']) {
                     $skuName = if ($res.Sku -is [string]) { $res.Sku }
@@ -3241,7 +3249,7 @@ if ($IncludeReservedInstances -and $script:hasAzReservations) {
                 $term      = (SafeProp $res 'Term') ?? ""
                 $appliedScope = (SafeProp $res 'AppliedScopeType') ?? (SafeProp $res 'UserFriendlyAppliedScopeType') ?? ""
 
-                # Expiry — try multiple property names
+                # Expiry -- try multiple property names
                 $expiry = (SafeProp $res 'ExpiryDate') ?? (SafeProp $res 'ExpiryDateTime') ?? $null
                 if ($expiry -and $expiry -is [string]) {
                     try { $expiry = [datetime]::Parse($expiry) } catch { $expiry = $null }
@@ -3269,10 +3277,10 @@ if ($IncludeReservedInstances -and $script:hasAzReservations) {
             }
         }
 
-        Write-Host "  ✓ Found $($reservedInstances.Count) reservation(s) across $($allOrders.Count) order(s)" -ForegroundColor Green
+        Write-Host "  [OK] Found $($reservedInstances.Count) reservation(s) across $($allOrders.Count) order(s)" -ForegroundColor Green
     }
     catch {
-        Write-Host "  ⚠ Could not read reservations: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "  [WARN] Could not read reservations: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-Host "    This usually means the account lacks Reservations Reader role at the tenant level" -ForegroundColor Gray
     }
 
@@ -3283,12 +3291,12 @@ if ($IncludeReservedInstances -and $script:hasAzReservations) {
 # EXPORT: Write Collection Pack
 # =========================================================
 Write-Host "" 
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "  Exporting Collection Pack" -ForegroundColor Cyan
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Final exports (optional data + metadata — other files already saved at checkpoints)
+# Final exports (optional data + metadata -- other files already saved at checkpoints)
 if ($IncludeQuotaUsage) {
     Export-PackJson -FileName "quota-usage.json" -Data $quotaUsage
 }
@@ -3428,21 +3436,21 @@ $metadata = [PSCustomObject]@{
 }
 
 $metadata | ConvertTo-Json -Depth 5 | Out-File -FilePath (Join-Path $outFolder "collection-metadata.json") -Encoding UTF8
-Write-Host "    ✓ collection-metadata.json" -ForegroundColor Green
+Write-Host "    [OK] collection-metadata.json" -ForegroundColor Green
 
-# ── Create ZIP ──
+# -- Create ZIP --
 # make sure diagnostic transcript is closed before archiving
 if (Get-Command Stop-Transcript -ErrorAction SilentlyContinue) { try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { } }
 
 # Remove checkpoint and internal files before archiving (they're internal bookkeeping)
 Get-ChildItem -Path $outFolder -Filter '_checkpoint_*.json' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 Get-ChildItem -Path $outFolder -Filter '_raw-vm-ids.json' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-# Diagnostic log contains raw Write-Host output with unscrubbed identifiers — remove when PII scrubbing
+# Diagnostic log contains raw Write-Host output with unscrubbed identifiers -- remove when PII scrubbing
 if ($ScrubPII) {
     Get-ChildItem -Path $outFolder -Filter 'diagnostic.log' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
-# ── PII Lookup Key (kept OUTSIDE the pack — never shared with consultant) ──
+# -- PII Lookup Key (kept OUTSIDE the pack -- never shared with consultant) --
 if ($ScrubPII -and $script:piiCache.Count -gt 0) {
     $lookupEntries = [System.Collections.Generic.List[object]]::new()
     foreach ($entry in $script:piiCache.GetEnumerator()) {
@@ -3457,16 +3465,16 @@ if ($ScrubPII -and $script:piiCache.Count -gt 0) {
     $keyFilePath = "$outFolder-PII-KEY.csv"
     $lookupEntries | Export-Csv -Path $keyFilePath -NoTypeInformation
     Write-Host ""
-    Write-Host "  🔑 PII Lookup Key: $keyFilePath" -ForegroundColor Magenta
+    Write-Host "  [KEY] PII Lookup Key: $keyFilePath" -ForegroundColor Magenta
     Write-Host "     This file maps anonymized names back to real resource names." -ForegroundColor Gray
-    Write-Host "     KEEP THIS FILE — do NOT send it with the collection pack." -ForegroundColor Yellow
+    Write-Host "     KEEP THIS FILE -- do NOT send it with the collection pack." -ForegroundColor Yellow
 }
 
 $zipPath = "$outFolder.zip"
 try {
     Compress-Archive -Path $outFolder -DestinationPath $zipPath -Force
     Write-Host ""
-    Write-Host "  ✓ Collection pack created: $zipPath" -ForegroundColor Green
+    Write-Host "  [OK] Collection pack created: $zipPath" -ForegroundColor Green
 
     # Calculate size
     $zipSize = (Get-Item $zipPath).Length
@@ -3475,7 +3483,7 @@ try {
 }
 catch {
     Write-Host ""
-    Write-Host "  ⚠ Could not create ZIP — data is in folder: $outFolder" -ForegroundColor Yellow
+    Write-Host "  [WARN] Could not create ZIP -- data is in folder: $outFolder" -ForegroundColor Yellow
 }
 
 # make sure diagnostic transcript is closed
@@ -3489,9 +3497,9 @@ if (Get-Command Stop-Transcript -ErrorAction SilentlyContinue) {
 $elapsed = (Get-Date) - $script:collectionStart
 
 Write-Host ""
-Write-Host "╔═══════════════════════════════════════════════════════════════════════╗" -ForegroundColor Green
-Write-Host "║                     COLLECTION COMPLETE                               ║" -ForegroundColor Green
-Write-Host "╚═══════════════════════════════════════════════════════════════════════╝" -ForegroundColor Green
+Write-Host "+=======================================================================+" -ForegroundColor Green
+Write-Host "|                     COLLECTION COMPLETE                               |" -ForegroundColor Green
+Write-Host "+=======================================================================+" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Host Pools:      $(SafeCount $hostPools)" -ForegroundColor White
 Write-Host "  Session Hosts:   $(SafeCount $sessionHosts)" -ForegroundColor White
@@ -3548,7 +3556,7 @@ if ($ScrubPII) {
     Write-Host "  PII:             Scrubbed (identifiers anonymized)" -ForegroundColor Magenta
     Write-Host "  PII Key:         $keyFilePath" -ForegroundColor Magenta
     Write-Host ""
-    Write-Host "  ⚠ IMPORTANT: The PII key file maps anonymized names to real names." -ForegroundColor Yellow
+    Write-Host "  [WARN] IMPORTANT: The PII key file maps anonymized names to real names." -ForegroundColor Yellow
     Write-Host "    Send ONLY the .zip file to your consultant." -ForegroundColor Yellow
     Write-Host "    Keep the PII key file to cross-reference findings." -ForegroundColor Yellow
 }
@@ -3558,7 +3566,7 @@ Write-Host "  Output:  $zipPath" -ForegroundColor Gray
 Write-Host ""
 
 if ((SafeCount $subsSkipped) -gt 0) {
-    Write-Host "  ⚠ Skipped subscriptions: $(($subsSkipped | ForEach-Object { Protect-SubscriptionId $_ }) -join ', ')" -ForegroundColor Yellow
+    Write-Host "  [WARN] Skipped subscriptions: $(($subsSkipped | ForEach-Object { Protect-SubscriptionId $_ }) -join ', ')" -ForegroundColor Yellow
     Write-Host ""
 }
 
