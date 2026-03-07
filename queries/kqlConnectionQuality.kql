@@ -1,5 +1,6 @@
 let connOS = WVDConnections
     | where State == "Connected"
+    | extend ClientOS = iff(isempty(ClientOS), strcat(ClientType, " Client"), ClientOS)
     | project CorrelationId, ClientOS;
 WVDConnectionNetworkData
 | where isnotnull(EstRoundTripTimeInMs) and EstRoundTripTimeInMs > 0
