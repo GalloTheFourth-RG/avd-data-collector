@@ -52,8 +52,7 @@ $null = $sb.AppendLine('$script:EmbeddedKqlQueries = @{')
 foreach ($kqlFile in $kqlFiles) {
     $queryName = $kqlFile.BaseName
     $queryContent = [System.IO.File]::ReadAllText($kqlFile.FullName, [System.Text.Encoding]::UTF8).TrimEnd()
-    # Escape single quotes for PowerShell here-string safety
-    $queryContent = $queryContent -replace "'", "''"
+    # Single-quoted here-strings (@'...'@) are fully literal -- no escaping needed
     $null = $sb.AppendLine("    '$queryName' = @'")
     $null = $sb.AppendLine($queryContent)
     $null = $sb.AppendLine("'@")

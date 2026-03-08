@@ -874,7 +874,7 @@ union isfuzzy=true
 union isfuzzy=true
     (WVDAutoscaleEvaluationPooled
     | extend HostPoolPath = tostring(Properties.hostPoolArmPath),
-             PoolName = tostring(split(Properties.hostPoolArmPath, ''/'')[-1]),
+             PoolName = tostring(split(Properties.hostPoolArmPath, '/')[-1]),
              ResultType = tostring(ResultType),
              ActiveHosts = toint(Properties.activeSessionHostCount),
              TotalHosts = toint(Properties.totalSessionHostCount),
@@ -893,7 +893,7 @@ union isfuzzy=true
     (print PoolName="NoTable", Evaluations=0, Succeeded=0, Failed=0, AvgActiveHosts=0.0, MaxActiveHosts=0, AvgTotalHosts=0.0, AvgSessions=0.0 | where 1==0)
 '@
     'kqlCheckpointLoginDecomposition' = @'
-// Single-pass login decomposition — uses min(iff()) for broad API compatibility.
+// Single-pass login decomposition -- uses min(iff()) for broad API compatibility.
 // minif/maxif not consistently supported across all Az module API versions.
 WVDCheckpoints
 | where Name in (
@@ -907,7 +907,7 @@ WVDCheckpoints
     "FirstGraphicsFrame", "FirstGraphicsFramePresented",
     "OnCoreApiLoginComplete")
 | summarize
-    StartTime = min(iff(Name == "StartOrchestration", TimeGenerated, datetime(null))),
+    SessionStart = min(iff(Name == "StartOrchestration", TimeGenerated, datetime(null))),
     BrokerTime = min(iff(Name == "LoadBalancedNewConnection", TimeGenerated, datetime(null))),
     OrchDone = min(iff(Name == "OrchestrationCompleted", TimeGenerated, datetime(null))),
     AuthStart = min(iff(Name == "OnCredentialsAcquisitionStarted", TimeGenerated, datetime(null))),
@@ -925,22 +925,22 @@ WVDCheckpoints
     FirstFrame = min(iff(Name == "FirstGraphicsFramePresented", TimeGenerated, datetime(null))),
     LoginComplete = min(iff(Name == "OnCoreApiLoginComplete", TimeGenerated, datetime(null)))
     by CorrelationId
-| where isnotnull(StartTime) and isnotnull(LoginComplete)
+| where isnotnull(SessionStart) and isnotnull(LoginComplete)
 | extend
     SecondHandshakeDone = iff(HandshakeCount > 1, LastHandshakeDone, datetime(null)),
     AuthEndMark = coalesce(FirstHandshakeDone, AuthDone),
     HasShortpathRehandshake = HandshakeCount > 1 and GotShortpathUpgrade,
     ShortpathHandshakeSec = iff(
         HandshakeCount > 1 and isnotnull(FirstHandshakeDone),
-        round(datetime_diff(''millisecond'', LastHandshakeDone, FirstHandshakeDone) / 1000.0, 1),
+        round(datetime_diff('millisecond', LastHandshakeDone, FirstHandshakeDone) / 1000.0, 1),
         0.0)
 | extend
-    TotalLoginSec = round(datetime_diff(''millisecond'', LoginComplete, StartTime) / 1000.0, 1),
-    BrokeringSec = round(datetime_diff(''millisecond'', coalesce(OrchDone, BrokerTime), StartTime) / 1000.0, 1),
-    AuthSec = round(datetime_diff(''millisecond'', coalesce(AuthEndMark, AuthDone), coalesce(AuthStart, OrchDone, StartTime)) / 1000.0, 1),
-    TransportSec = round(datetime_diff(''millisecond'', coalesce(TransportReady, RdpReady), coalesce(AuthEndMark, AuthDone, StartTime)) / 1000.0, 1),
-    LogonSec = round(datetime_diff(''millisecond'', coalesce(LogonDone, ShellStart), coalesce(RdpReady, TransportReady)) / 1000.0, 1),
-    ShellSec = round(datetime_diff(''millisecond'', coalesce(ShellReady, FirstFrame), coalesce(ShellStart, LogonDone)) / 1000.0, 1),
+    TotalLoginSec = round(datetime_diff('millisecond', LoginComplete, SessionStart) / 1000.0, 1),
+    BrokeringSec = round(datetime_diff('millisecond', coalesce(OrchDone, BrokerTime), SessionStart) / 1000.0, 1),
+    AuthSec = round(datetime_diff('millisecond', coalesce(AuthEndMark, AuthDone), coalesce(AuthStart, OrchDone, SessionStart)) / 1000.0, 1),
+    TransportSec = round(datetime_diff('millisecond', coalesce(TransportReady, RdpReady), coalesce(AuthEndMark, AuthDone, SessionStart)) / 1000.0, 1),
+    LogonSec = round(datetime_diff('millisecond', coalesce(LogonDone, ShellStart), coalesce(RdpReady, TransportReady)) / 1000.0, 1),
+    ShellSec = round(datetime_diff('millisecond', coalesce(ShellReady, FirstFrame), coalesce(ShellStart, LogonDone)) / 1000.0, 1),
     GotShortpath = isnotnull(ShortpathDone)
 | summarize
     TotalConnections = count(),
@@ -1020,7 +1020,7 @@ WVDConnectionNetworkData
 '@
     'kqlConnectionSuccessRate' = @'
 WVDConnections
-| extend HostPool = tostring(split(_ResourceId, ''/'')[-1])
+| extend HostPool = tostring(split(_ResourceId, '/')[-1])
 | summarize
     TotalAttempts = count(),
     Succeeded = countif(State == "Connected" or State == "Completed"),
@@ -1055,7 +1055,7 @@ Perf
     'kqlCrossRegionConnections' = @'
 let connDetails = WVDConnections
     | where State == "Connected" and isnotempty(GatewayRegion) and isnotempty(SessionHostName)
-    | extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, ''/'')[1]), SessionHostName)
+    | extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, '/')[1]), SessionHostName)
     | project CorrelationId, GatewayRegion, HostName, UserName;
 WVDConnectionNetworkData
 | where isnotnull(EstRoundTripTimeInMs) and EstRoundTripTimeInMs > 0
@@ -1076,14 +1076,14 @@ WVDConnectionNetworkData
 let hasPerfData = toscalar(Perf | where ObjectName == "Processor" and CounterName == "% Processor Time" | take 1 | count);
 let disconnects = WVDConnections
 | where State == "Completed"
-| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, ''/'')[1]), SessionHostName)
-| extend HostNameShort = tostring(split(HostName, ''.'')[0])
+| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, '/')[1]), SessionHostName)
+| extend HostNameShort = tostring(split(HostName, '.')[0])
 | join kind=leftouter (WVDErrors | summarize ErrorCode = take_any(CodeSymbolic) by CorrelationId) on CorrelationId
 | where isnotempty(ErrorCode) and not(ErrorCode has_any ("ClientDisconnect", "LogoffByUser", "UserInitiated", "ActivityTimeout", "SessionTimeout", "IdleTimeout"))
 | project DisconnectTime = TimeGenerated, HostName, HostNameShort, CorrelationId, ErrorCode;
 let cpuData = Perf
 | where ObjectName == "Processor" and CounterName == "% Processor Time" and InstanceName == "_Total"
-| extend ComputerShort = tostring(split(Computer, ''.'')[0])
+| extend ComputerShort = tostring(split(Computer, '.')[0])
 | project CpuTime = TimeGenerated, Computer, ComputerShort, CpuValue = CounterValue;
 disconnects
 | join kind=inner (cpuData) on $left.HostNameShort == $right.ComputerShort
@@ -1156,7 +1156,7 @@ completedOrErrored
     isnotempty(ErrorCode), strcat("Other: ", ErrorCode),
     "Normal Completion"
 )
-| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, ''/'')[1]), SessionHostName)
+| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, '/')[1]), SessionHostName)
 | summarize
     SessionCount = dcount(CorrelationId),
     DistinctUsers = dcount(UserName),
@@ -1171,9 +1171,9 @@ let starts = WVDConnections | where State == "Connected" | project CorrelationId
 let ends = WVDConnections | where State == "Completed" | project CorrelationId, EndTime = TimeGenerated;
 starts
 | join kind=inner ends on CorrelationId
-| extend SessionDurationSec = datetime_diff(''second'', EndTime, ConnectTime)
+| extend SessionDurationSec = datetime_diff('second', EndTime, ConnectTime)
 | extend IsUnexpected = (SessionDurationSec < 60)
-| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, ''/'')[1]), SessionHostName)
+| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, '/')[1]), SessionHostName)
 | summarize
     TotalSessions = count(),
     UnexpectedDisconnects = countif(IsUnexpected),
@@ -1196,7 +1196,7 @@ sessions
 | join kind=leftouter completions on CorrelationId
 | join kind=leftouter errors on CorrelationId
 | where isnotnull(CompletedTime) or isnotempty(ErrorCode)
-| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, ''/'')[1]), SessionHostName)
+| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, '/')[1]), SessionHostName)
 | extend IsAbnormal = isnotempty(ErrorCode) and not(ErrorCode has_any ("ClientDisconnect", "LogoffByUser", "UserInitiated", "ActivityTimeout", "SessionTimeout", "IdleTimeout", "SessionLogoff", "IdleDisconnect", "AutoReconnect", "Reconnect", "SavedCredentialsNotAllowed", "AutoReconnectNoCookie"))
 | summarize
     TotalSessions = dcount(CorrelationId),
@@ -1239,11 +1239,11 @@ WVDConnections
 | order by HourOfDay asc
 '@
     'kqlLoginTime' = @'
-let started = WVDConnections | where State == "Started" | project CorrelationId, StartTime = TimeGenerated;
-let connected = WVDConnections | where State == "Connected" | extend HostPool = tostring(split(_ResourceId, ''/'')[-1]) | project CorrelationId, HostPool, ConnectTime = TimeGenerated;
+let started = WVDConnections | where State == "Started" | project CorrelationId, SessionStart = TimeGenerated;
+let connected = WVDConnections | where State == "Connected" | extend HostPool = tostring(split(_ResourceId, '/')[-1]) | project CorrelationId, HostPool, ConnectTime = TimeGenerated;
 connected
 | join kind=inner started on CorrelationId
-| extend LoginDurationSec = datetime_diff(''second'', ConnectTime, StartTime)
+| extend LoginDurationSec = datetime_diff('second', ConnectTime, SessionStart)
 | where LoginDurationSec >= 0 and LoginDurationSec < 600
 | summarize AvgLoginSec = round(avg(LoginDurationSec), 1), P50LoginSec = round(percentile(LoginDurationSec, 50), 1), P95LoginSec = round(percentile(LoginDurationSec, 95), 1), MaxLoginSec = max(LoginDurationSec), TotalConnections = count() by HostPool
 '@
@@ -1326,13 +1326,13 @@ Perf
 | take 50
 '@
     'kqlProfileLoadPerformance' = @'
-let started = WVDConnections | where State == "Started" | project CorrelationId, StartTime = TimeGenerated;
+let started = WVDConnections | where State == "Started" | project CorrelationId, SessionStart = TimeGenerated;
 let connected = WVDConnections | where State == "Connected" | project CorrelationId, SessionHostName, ConnectTime = TimeGenerated;
 connected
 | join kind=inner started on CorrelationId
-| extend ConnectionTimeSec = datetime_diff(''second'', ConnectTime, StartTime)
+| extend ConnectionTimeSec = datetime_diff('second', ConnectTime, SessionStart)
 | where ConnectionTimeSec >= 0 and ConnectionTimeSec < 600
-| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, ''/'')[1]), SessionHostName)
+| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, '/')[1]), SessionHostName)
 | summarize
     AvgProfileLoadSec = round(avg(ConnectionTimeSec), 1),
     P50ProfileLoadSec = round(percentile(ConnectionTimeSec, 50), 1),
@@ -1348,12 +1348,12 @@ connected
     'kqlReconnectionLoops' = @'
 WVDConnections
 | where State == "Connected"
-| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, ''/'')[1]), SessionHostName)
+| extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, '/')[1]), SessionHostName)
 | project TimeGenerated, UserName, HostName, CorrelationId
 | order by UserName asc, TimeGenerated asc
 | serialize
 | extend PrevTime = prev(TimeGenerated), PrevUser = prev(UserName)
-| extend GapMinutes = iff(UserName == PrevUser, datetime_diff(''minute'', TimeGenerated, PrevTime), 999)
+| extend GapMinutes = iff(UserName == PrevUser, datetime_diff('minute', TimeGenerated, PrevTime), 999)
 | where GapMinutes <= 30 and GapMinutes >= 0
 | summarize
     ReconnectCount = count(),
@@ -1377,7 +1377,7 @@ let connected = WVDConnections | where State == "Connected" | project Correlatio
 let completed = WVDConnections | where State == "Completed" | project CorrelationId, EndTime = TimeGenerated;
 connected
 | join kind=inner completed on CorrelationId
-| extend SessionDurationMinutes = datetime_diff(''minute'', EndTime, ConnectTime)
+| extend SessionDurationMinutes = datetime_diff('minute', EndTime, ConnectTime)
 | where SessionDurationMinutes >= 0
 | summarize AvgDuration = round(avg(SessionDurationMinutes), 1), MaxDuration = max(SessionDurationMinutes) by UserName
 '@
