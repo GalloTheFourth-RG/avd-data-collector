@@ -893,8 +893,8 @@ union isfuzzy=true
     (print PoolName="NoTable", Evaluations=0, Succeeded=0, Failed=0, AvgActiveHosts=0.0, MaxActiveHosts=0, AvgTotalHosts=0.0, AvgSessions=0.0 | where 1==0)
 '@
     'kqlCheckpointLoginDecomposition' = @'
-// Single-pass login decomposition — no let/join for API compatibility.
-// Handshake first/second detection uses min/max/count.
+// Single-pass login decomposition — uses min(iff()) for broad API compatibility.
+// minif/maxif not consistently supported across all Az module API versions.
 WVDCheckpoints
 | where Name in (
     "StartOrchestration", "LoadBalancedNewConnection", "OrchestrationCompleted",
@@ -907,23 +907,23 @@ WVDCheckpoints
     "FirstGraphicsFrame", "FirstGraphicsFramePresented",
     "OnCoreApiLoginComplete")
 | summarize
-    StartTime = minif(TimeGenerated, Name == "StartOrchestration"),
-    BrokerTime = minif(TimeGenerated, Name == "LoadBalancedNewConnection"),
-    OrchDone = minif(TimeGenerated, Name == "OrchestrationCompleted"),
-    AuthStart = minif(TimeGenerated, Name == "OnCredentialsAcquisitionStarted"),
-    AuthDone = minif(TimeGenerated, Name == "OnCredentialsAcquisitionCompleted"),
-    FirstHandshakeDone = minif(TimeGenerated, Name == "OnSecurityHandshakeCompleted"),
-    LastHandshakeDone = maxif(TimeGenerated, Name == "OnSecurityHandshakeCompleted"),
+    StartTime = min(iff(Name == "StartOrchestration", TimeGenerated, datetime(null))),
+    BrokerTime = min(iff(Name == "LoadBalancedNewConnection", TimeGenerated, datetime(null))),
+    OrchDone = min(iff(Name == "OrchestrationCompleted", TimeGenerated, datetime(null))),
+    AuthStart = min(iff(Name == "OnCredentialsAcquisitionStarted", TimeGenerated, datetime(null))),
+    AuthDone = min(iff(Name == "OnCredentialsAcquisitionCompleted", TimeGenerated, datetime(null))),
+    FirstHandshakeDone = min(iff(Name == "OnSecurityHandshakeCompleted", TimeGenerated, datetime(null))),
+    LastHandshakeDone = max(iff(Name == "OnSecurityHandshakeCompleted", TimeGenerated, datetime(null))),
     HandshakeCount = countif(Name == "OnSecurityHandshakeCompleted"),
-    TransportReady = minif(TimeGenerated, Name == "TransportConnected"),
-    ShortpathDone = minif(TimeGenerated, Name == "ShortpathEstablished"),
+    TransportReady = min(iff(Name == "TransportConnected", TimeGenerated, datetime(null))),
+    ShortpathDone = min(iff(Name == "ShortpathEstablished", TimeGenerated, datetime(null))),
     GotShortpathUpgrade = countif(Name == "GatewayTransportReplacedByShortpath") > 0,
-    RdpReady = minif(TimeGenerated, Name == "RdpStackConnectionEstablished"),
-    LogonDone = minif(TimeGenerated, Name == "RdpStackLogon"),
-    ShellStart = minif(TimeGenerated, Name == "RdpShellAppExecution"),
-    ShellReady = minif(TimeGenerated, Name == "RdpShellAppExecuted"),
-    FirstFrame = minif(TimeGenerated, Name == "FirstGraphicsFramePresented"),
-    LoginComplete = minif(TimeGenerated, Name == "OnCoreApiLoginComplete")
+    RdpReady = min(iff(Name == "RdpStackConnectionEstablished", TimeGenerated, datetime(null))),
+    LogonDone = min(iff(Name == "RdpStackLogon", TimeGenerated, datetime(null))),
+    ShellStart = min(iff(Name == "RdpShellAppExecution", TimeGenerated, datetime(null))),
+    ShellReady = min(iff(Name == "RdpShellAppExecuted", TimeGenerated, datetime(null))),
+    FirstFrame = min(iff(Name == "FirstGraphicsFramePresented", TimeGenerated, datetime(null))),
+    LoginComplete = min(iff(Name == "OnCoreApiLoginComplete", TimeGenerated, datetime(null)))
     by CorrelationId
 | where isnotnull(StartTime) and isnotnull(LoginComplete)
 | extend
@@ -1239,14 +1239,10 @@ WVDConnections
 | order by HourOfDay asc
 '@
     'kqlLoginTime' = @'
-WVDConnections
-| where State in ("Started", "Connected")
-| extend HostPool = tostring(split(_ResourceId, ''/'')[-1])
-| summarize
-    StartTime = minif(TimeGenerated, State == "Started"),
-    ConnectTime = minif(TimeGenerated, State == "Connected")
-    by CorrelationId, HostPool
-| where isnotnull(StartTime) and isnotnull(ConnectTime)
+let started = WVDConnections | where State == "Started" | project CorrelationId, StartTime = TimeGenerated;
+let connected = WVDConnections | where State == "Connected" | extend HostPool = tostring(split(_ResourceId, ''/'')[-1]) | project CorrelationId, HostPool, ConnectTime = TimeGenerated;
+connected
+| join kind=inner started on CorrelationId
 | extend LoginDurationSec = datetime_diff(''second'', ConnectTime, StartTime)
 | where LoginDurationSec >= 0 and LoginDurationSec < 600
 | summarize AvgLoginSec = round(avg(LoginDurationSec), 1), P50LoginSec = round(percentile(LoginDurationSec, 50), 1), P95LoginSec = round(percentile(LoginDurationSec, 95), 1), MaxLoginSec = max(LoginDurationSec), TotalConnections = count() by HostPool
@@ -1330,15 +1326,10 @@ Perf
 | take 50
 '@
     'kqlProfileLoadPerformance' = @'
-WVDConnections
-| where State in ("Started", "Connected")
-| extend Host = iif(State == "Connected", SessionHostName, "")
-| summarize
-    StartTime = minif(TimeGenerated, State == "Started"),
-    ConnectTime = minif(TimeGenerated, State == "Connected"),
-    SessionHostName = max(Host)
-    by CorrelationId
-| where isnotnull(StartTime) and isnotnull(ConnectTime)
+let started = WVDConnections | where State == "Started" | project CorrelationId, StartTime = TimeGenerated;
+let connected = WVDConnections | where State == "Connected" | project CorrelationId, SessionHostName, ConnectTime = TimeGenerated;
+connected
+| join kind=inner started on CorrelationId
 | extend ConnectionTimeSec = datetime_diff(''second'', ConnectTime, StartTime)
 | where ConnectionTimeSec >= 0 and ConnectionTimeSec < 600
 | extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, ''/'')[1]), SessionHostName)
@@ -1382,14 +1373,10 @@ WVDConnections
 | take 50
 '@
     'kqlSessionDuration' = @'
-WVDConnections
-| where State in ("Connected", "Completed")
-| summarize
-    ConnectTime = minif(TimeGenerated, State == "Connected"),
-    EndTime = minif(TimeGenerated, State == "Completed"),
-    UserName = take_any(UserName)
-    by CorrelationId
-| where isnotnull(ConnectTime) and isnotnull(EndTime)
+let connected = WVDConnections | where State == "Connected" | project CorrelationId, UserName, ConnectTime = TimeGenerated;
+let completed = WVDConnections | where State == "Completed" | project CorrelationId, EndTime = TimeGenerated;
+connected
+| join kind=inner completed on CorrelationId
 | extend SessionDurationMinutes = datetime_diff(''minute'', EndTime, ConnectTime)
 | where SessionDurationMinutes >= 0
 | summarize AvgDuration = round(avg(SessionDurationMinutes), 1), MaxDuration = max(SessionDurationMinutes) by UserName

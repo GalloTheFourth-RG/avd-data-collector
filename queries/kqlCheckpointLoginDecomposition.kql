@@ -1,5 +1,5 @@
-// Single-pass login decomposition — no let/join for API compatibility.
-// Handshake first/second detection uses min/max/count.
+// Single-pass login decomposition — uses min(iff()) for broad API compatibility.
+// minif/maxif not consistently supported across all Az module API versions.
 WVDCheckpoints
 | where Name in (
     "StartOrchestration", "LoadBalancedNewConnection", "OrchestrationCompleted",
@@ -12,23 +12,23 @@ WVDCheckpoints
     "FirstGraphicsFrame", "FirstGraphicsFramePresented",
     "OnCoreApiLoginComplete")
 | summarize
-    StartTime = minif(TimeGenerated, Name == "StartOrchestration"),
-    BrokerTime = minif(TimeGenerated, Name == "LoadBalancedNewConnection"),
-    OrchDone = minif(TimeGenerated, Name == "OrchestrationCompleted"),
-    AuthStart = minif(TimeGenerated, Name == "OnCredentialsAcquisitionStarted"),
-    AuthDone = minif(TimeGenerated, Name == "OnCredentialsAcquisitionCompleted"),
-    FirstHandshakeDone = minif(TimeGenerated, Name == "OnSecurityHandshakeCompleted"),
-    LastHandshakeDone = maxif(TimeGenerated, Name == "OnSecurityHandshakeCompleted"),
+    StartTime = min(iff(Name == "StartOrchestration", TimeGenerated, datetime(null))),
+    BrokerTime = min(iff(Name == "LoadBalancedNewConnection", TimeGenerated, datetime(null))),
+    OrchDone = min(iff(Name == "OrchestrationCompleted", TimeGenerated, datetime(null))),
+    AuthStart = min(iff(Name == "OnCredentialsAcquisitionStarted", TimeGenerated, datetime(null))),
+    AuthDone = min(iff(Name == "OnCredentialsAcquisitionCompleted", TimeGenerated, datetime(null))),
+    FirstHandshakeDone = min(iff(Name == "OnSecurityHandshakeCompleted", TimeGenerated, datetime(null))),
+    LastHandshakeDone = max(iff(Name == "OnSecurityHandshakeCompleted", TimeGenerated, datetime(null))),
     HandshakeCount = countif(Name == "OnSecurityHandshakeCompleted"),
-    TransportReady = minif(TimeGenerated, Name == "TransportConnected"),
-    ShortpathDone = minif(TimeGenerated, Name == "ShortpathEstablished"),
+    TransportReady = min(iff(Name == "TransportConnected", TimeGenerated, datetime(null))),
+    ShortpathDone = min(iff(Name == "ShortpathEstablished", TimeGenerated, datetime(null))),
     GotShortpathUpgrade = countif(Name == "GatewayTransportReplacedByShortpath") > 0,
-    RdpReady = minif(TimeGenerated, Name == "RdpStackConnectionEstablished"),
-    LogonDone = minif(TimeGenerated, Name == "RdpStackLogon"),
-    ShellStart = minif(TimeGenerated, Name == "RdpShellAppExecution"),
-    ShellReady = minif(TimeGenerated, Name == "RdpShellAppExecuted"),
-    FirstFrame = minif(TimeGenerated, Name == "FirstGraphicsFramePresented"),
-    LoginComplete = minif(TimeGenerated, Name == "OnCoreApiLoginComplete")
+    RdpReady = min(iff(Name == "RdpStackConnectionEstablished", TimeGenerated, datetime(null))),
+    LogonDone = min(iff(Name == "RdpStackLogon", TimeGenerated, datetime(null))),
+    ShellStart = min(iff(Name == "RdpShellAppExecution", TimeGenerated, datetime(null))),
+    ShellReady = min(iff(Name == "RdpShellAppExecuted", TimeGenerated, datetime(null))),
+    FirstFrame = min(iff(Name == "FirstGraphicsFramePresented", TimeGenerated, datetime(null))),
+    LoginComplete = min(iff(Name == "OnCoreApiLoginComplete", TimeGenerated, datetime(null)))
     by CorrelationId
 | where isnotnull(StartTime) and isnotnull(LoginComplete)
 | extend

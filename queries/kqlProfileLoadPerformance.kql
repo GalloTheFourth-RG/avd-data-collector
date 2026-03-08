@@ -1,12 +1,7 @@
-WVDConnections
-| where State in ("Started", "Connected")
-| extend Host = iif(State == "Connected", SessionHostName, "")
-| summarize
-    StartTime = minif(TimeGenerated, State == "Started"),
-    ConnectTime = minif(TimeGenerated, State == "Connected"),
-    SessionHostName = max(Host)
-    by CorrelationId
-| where isnotnull(StartTime) and isnotnull(ConnectTime)
+let started = WVDConnections | where State == "Started" | project CorrelationId, StartTime = TimeGenerated;
+let connected = WVDConnections | where State == "Connected" | project CorrelationId, SessionHostName, ConnectTime = TimeGenerated;
+connected
+| join kind=inner started on CorrelationId
 | extend ConnectionTimeSec = datetime_diff('second', ConnectTime, StartTime)
 | where ConnectionTimeSec >= 0 and ConnectionTimeSec < 600
 | extend HostName = iif(SessionHostName contains "/", tostring(split(SessionHostName, '/')[1]), SessionHostName)
