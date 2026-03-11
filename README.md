@@ -389,7 +389,6 @@ avd-data-collector/
 │   └── USER-MANUAL.md
 ├── tools/                     # Development utilities
 ├── examples/                  # Usage examples
-├── EMAIL_INSTRUCTIONS.txt     # Template email for customers
 ├── LICENSE                    # MIT License
 ├── CHANGELOG.md
 └── CONTRIBUTING.md
