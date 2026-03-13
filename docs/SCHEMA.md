@@ -11,7 +11,7 @@ The schema version is recorded in `collection-metadata.json` and used by consume
 | Schema Version | Collector Version | Notes |
 |---------------|-------------------|-------|
 | 2.0 | 1.1.0 | Extended collection (cost, network, storage, images, governance), diagnostic readiness |
-| 1.1 | 1.0.0 | Initial release, compatible with Enhanced AVD Evidence Pack v4.12.0+ |
+| 1.1 | 1.0.0 | Initial release, compatible with Aperture v4.12.0+ |
 
 ---
 
@@ -276,7 +276,7 @@ Collected when `-IncludeQuotaUsage` is specified.
 
 ## Compatibility
 
-This schema is designed for compatibility with the [Enhanced AVD Evidence Pack](https://github.com/intrepidtechie/enhanced-avd-evidence-pack) `-CollectionPack` parameter. The Evidence Pack validates `SchemaVersion` in `collection-metadata.json` and supports versions `1.1` and `2.0`.
+This schema is designed for compatibility with [Aperture](https://github.com/intrepidtechie/enhanced-avd-evidence-pack) (`-CollectionPack` parameter). Aperture validates `SchemaVersion` in `collection-metadata.json` and supports versions `1.1` and `2.0`.
 
 ### Notes for Consumers
 

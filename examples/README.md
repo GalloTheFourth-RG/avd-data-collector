@@ -58,7 +58,7 @@ Usage examples for the AVD Data Collector.
     -SkipDisclaimer
 ```
 
-## Feed into Enhanced AVD Evidence Pack
+## Feed into Aperture (AVD Health Intelligence)
 
 ```powershell
 # Step 1: Collect (run in customer environment)

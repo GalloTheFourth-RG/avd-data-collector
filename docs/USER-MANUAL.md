@@ -785,9 +785,9 @@ Yes. Use `-SkipDisclaimer` to bypass the interactive prompt:
 .\Collect-AVDData.ps1 -TenantId $t -SubscriptionIds $s -SkipDisclaimer
 ```
 
-### What's the difference between this and the Enhanced AVD Evidence Pack?
+### What's the difference between this and Aperture?
 
-| | AVD Data Collector (this tool) | Enhanced AVD Evidence Pack |
+| | AVD Data Collector (this tool) | Aperture |
 |---|---|---|
 | **Purpose** | Collects raw data | Analyzes data and produces recommendations |
 | **Output** | JSON files in a ZIP | HTML dashboard + 75+ CSVs + executive summary |
@@ -795,7 +795,7 @@ Yes. Use `-SkipDisclaimer` to bypass the interactive prompt:
 | **Azure access** | Required | Optional (can use collection pack) |
 | **Analysis** | None | Right-sizing, security scoring, cost optimization, UX scoring |
 
-The typical workflow: you run the collector → send the ZIP → your consultant runs the Evidence Pack against it → you get back an HTML report with findings.
+The typical workflow: you run the collector → send the ZIP → your consultant runs Aperture against it → you get back an HTML report with findings.
 
 ### I got an error not listed here. What should I do?
 

@@ -2,11 +2,11 @@
 
 ## Quick Context for Copilot
 
-This is a **public**, customer-facing PowerShell script that collects Azure Virtual Desktop data for offline analysis. It gathers ARM resources, Azure Monitor metrics, Log Analytics (KQL) query results, and optional data (costs, network topology, images, storage, orphans, diagnostics, alerts, activity logs). Outputs a portable ZIP of JSON files consumed by the private **enhanced-avd-evidence-pack** repo.
+This is a **public**, customer-facing PowerShell script that collects Azure Virtual Desktop data for offline analysis. It gathers ARM resources, Azure Monitor metrics, Log Analytics (KQL) query results, and optional data (costs, network topology, images, storage, orphans, diagnostics, alerts, activity logs). Outputs a portable ZIP of JSON files consumed by the private **Aperture** repo (`enhanced-avd-evidence-pack`).
 
 **Two-repo architecture:**
 - **avd-data-collector** (public, this repo) — Customer runs this. Read-only data collection from Azure APIs.
-- **enhanced-avd-evidence-pack** (private) — Ingests the collection ZIP offline. Performs all analysis, scoring, and reporting.
+- **Aperture** (`enhanced-avd-evidence-pack`, private) — Ingests the collection ZIP offline. Performs all analysis, scoring, and reporting.
 
 **Single script**: `Collect-AVDData.ps1` (~3,300 lines). Build system (`build.ps1`) embeds KQL queries into `dist/Collect-AVDData.ps1` for self-contained distribution. Source runs directly when `queries/` folder is present.
 
