@@ -343,12 +343,20 @@ Collected when `-IncludeCapacityReservations` is specified.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| GroupName | string | CRG name |
-| ReservationName | string | Individual reservation name |
+| SubscriptionId | string | Subscription ID (anonymized under `-ScrubPII`) |
+| GroupName | string | CRG name (anonymized under `-ScrubPII`) |
+| GroupId | string | CRG ARM resource ID (anonymized under `-ScrubPII`) |
+| ReservationName | string | Individual reservation name, or `(no reservations)` for an empty group placeholder row |
+| Location | string | Azure region |
+| Zones | string | Comma-separated availability zones (empty if none) |
 | SKU | string | Reserved VM SKU |
-| AllocatedCapacity | int | Reserved capacity |
+| AllocatedCapacity | int | Reserved capacity (from `sku.capacity`) |
+| ProvisioningState | string | Reservation provisioning state; `EmptyGroup` marks the placeholder row for a group with zero reservations |
+| ProvisioningTime | string | Reservation provisioning timestamp |
 | UtilizedVMs | int | VMs using the reservation |
-| VMReferences | string | Semicolon-separated VM ARM IDs |
+| VMReferences | string | Semicolon-separated VM ARM IDs (`[SCRUBBED]` under `-ScrubPII`) |
+
+A Capacity Reservation Group with zero reservations still exports one group-level placeholder row (`ReservationName = "(no reservations)"`, `ProvisioningState = "EmptyGroup"`) so the group surfaces downstream instead of vanishing.
 
 ### quota-usage.json
 
