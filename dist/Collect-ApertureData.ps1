@@ -18,7 +18,7 @@
     your own risk. This tool is not a substitute for professional consulting or Microsoft
     support. No warranty or support guarantee is provided.
 
-    Version: 1.7.3
+    Version: 1.7.4
 .PARAMETER TenantId
     Azure AD / Entra ID tenant ID
 .PARAMETER SubscriptionIds
@@ -639,7 +639,7 @@ if (-not (Get-Command SafeProp -ErrorAction SilentlyContinue)) {
 $WarningPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$script:ScriptVersion = "1.7.3"
+$script:ScriptVersion = "1.7.4"
 $script:SchemaVersion = "2.0"
 
 # Embedded KQL queries (populated by build.ps1, empty when running from source)
@@ -2601,6 +2601,11 @@ Write-Host ""
 Write-MemoryUsage "Collection start"
 if ($ScrubPII) {
     Write-Host "  [PII SCRUBBING ENABLED] identifiers will be anonymized" -ForegroundColor Magenta
+    Write-Host ""
+} else {
+    Write-Host "  [PII NOTICE] Running without -ScrubPII: resource names, usernames (UPNs)," -ForegroundColor Yellow
+    Write-Host "    and IP addresses will appear in the collection pack as-is." -ForegroundColor Yellow
+    Write-Host "    Add -ScrubPII to anonymize, or inspect the JSON files before sharing." -ForegroundColor Yellow
     Write-Host ""
 }
 
@@ -6025,6 +6030,9 @@ if ($ScrubPII) {
     Write-Host "  [WARN] IMPORTANT: The PII key file maps anonymized names to real names." -ForegroundColor Yellow
     Write-Host "    Send ONLY the .zip file to your consultant." -ForegroundColor Yellow
     Write-Host "    Keep the PII key file to cross-reference findings." -ForegroundColor Yellow
+} else {
+    Write-Host "  PII:             Not scrubbed -- pack contains real resource names, UPNs, and IPs" -ForegroundColor Yellow
+    Write-Host "    Inspect the JSON files in the ZIP before sharing, or re-run with -ScrubPII." -ForegroundColor Yellow
 }
 Write-Host ""
 Write-Host "  Runtime: $([math]::Round($elapsed.TotalMinutes, 1)) minutes" -ForegroundColor Gray

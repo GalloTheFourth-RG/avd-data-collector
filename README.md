@@ -152,6 +152,8 @@ Log Analytics perf counters (`LogicalDisk`, `PhysicalDisk`) are **not required**
 
 This section documents the security posture of the Aperture Data Collector for review by information security, compliance, and risk teams.
 
+> **One-page version for your security team:** [SECURITY.md](SECURITY.md) — read-only guarantee, no-telemetry pledge, what is never collected, credential handling, download verification, and data retention guidance.
+
 ### Security Guarantees
 
 | Guarantee | Detail |
@@ -234,6 +236,16 @@ Add `-ScrubPII` to anonymize all identifiable data **before** it is written to d
 ```
 
 When `-ScrubPII` is used, a separate **PII key CSV** (`*-PII-KEY.csv`) is written alongside the ZIP. This maps anonymous IDs back to original values for the analyst. Do **not** share the key file unless the recipient needs to correlate findings with real resource names.
+
+### Verify Your Download
+
+Each GitHub release attaches the built `Collect-ApertureData.ps1` as an asset, and GitHub shows its **SHA-256 digest** next to the asset on the [release page](https://github.com/GalloTheFourth-RG/aperture-data-collector/releases/latest). After downloading, confirm your copy matches:
+
+```powershell
+(Get-FileHash .\Collect-ApertureData.ps1 -Algorithm SHA256).Hash
+```
+
+If the hash differs from the one on the release page, do not run the script — re-download from the official repository. You can also clone the repo and review or run the source directly.
 
 ### Inspect Before Sharing
 

@@ -2,7 +2,12 @@
 
 All notable changes to the Aperture Data Collector will be documented in this file.
 
-## [Unreleased]
+## [1.7.4] -- 2026-07-25
+
+### Added
+- **`SECURITY.md`** -- single-page security posture document for customer infosec/compliance review: read-only guarantee (with self-verification command), no-telemetry pledge, list of data never collected (registration tokens, keys, secrets), credential/token handling, least-privilege matrix, `-ScrubPII` details, download verification via the GitHub release SHA-256 digest, data retention guidance, and a private vulnerability reporting channel. Linked from the README Security & Privacy section.
+- **README "Verify Your Download" section** -- documents how to compare a downloaded script against the SHA-256 digest GitHub displays on the release asset (`Get-FileHash`).
+- **Console PII notice when running without `-ScrubPII`** -- at collection start and in the final summary, the script now reminds the operator that real resource names, UPNs, and IPs are in the pack, and suggests `-ScrubPII` or inspecting the JSON before sharing.
 
 ### Changed
 - **`build.ps1 -Release` now attaches the built `dist/Collect-ApertureData.ps1` as a release asset.** Previously `gh release create` published only the auto-generated source tarballs, so recent releases (e.g. v1.7.1) had no directly downloadable script. The release flow now uploads the built single-file script, and re-running `-Release` against an existing release backfills the asset if it is missing (`gh release upload --clobber`). The v1.7.1 release asset was backfilled retroactively.
