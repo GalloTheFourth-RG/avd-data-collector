@@ -18,7 +18,7 @@
     your own risk. This tool is not a substitute for professional consulting or Microsoft
     support. No warranty or support guarantee is provided.
 
-    Version: 1.7.2
+    Version: 1.7.3
 .PARAMETER TenantId
     Azure AD / Entra ID tenant ID
 .PARAMETER SubscriptionIds
@@ -639,7 +639,7 @@ if (-not (Get-Command SafeProp -ErrorAction SilentlyContinue)) {
 $WarningPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$script:ScriptVersion = "1.7.2"
+$script:ScriptVersion = "1.7.3"
 $script:SchemaVersion = "2.0"
 
 # Embedded KQL queries (populated by build.ps1, empty when running from source)
@@ -659,6 +659,7 @@ $vmMetrics = [System.Collections.Generic.List[object]]::new()
 $vmMetricsIncident = [System.Collections.Generic.List[object]]::new()
 $laResults = [System.Collections.Generic.List[object]]::new()
 $capacityReservationGroups = [System.Collections.Generic.List[object]]::new()
+$crgSeenSharedIds = @{}   # dedupe shared CRGs discovered from multiple consuming subscriptions
 $reservedInstances = [System.Collections.Generic.List[object]]::new()
 $quotaUsage = [System.Collections.Generic.List[object]]::new()
 $intuneManagedDevices = [System.Collections.Generic.List[object]]::new()
@@ -3357,9 +3358,9 @@ foreach ($subId in $SubscriptionIds) {
         try {
             $crApiUrl = "https://management.azure.com/subscriptions/$subId/providers/Microsoft.Compute/capacityReservationGroups?api-version=2024-03-01&`$expand=virtualMachines/`$ref"
             $crResp = Invoke-AzRestMethod -Uri $crApiUrl -Method GET -ErrorAction Stop
+            $crItems = [System.Collections.Generic.List[object]]::new()
             if ($crResp.StatusCode -eq 200) {
                 $crData = $crResp.Content | ConvertFrom-Json
-                $crItems = [System.Collections.Generic.List[object]]::new()
                 foreach ($crVal in @(SafeArray $crData.value)) { $crItems.Add($crVal) }
                 # Handle pagination
                 $crNextLink = SafeProp $crData 'nextLink'
@@ -3371,16 +3372,95 @@ foreach ($subId in $SubscriptionIds) {
                         $crNextLink = SafeProp $crNlData 'nextLink'
                     } else { $crNextLink = $null }
                 }
-                foreach ($crg in $crItems) {
+            }
+
+            # Discover CRGs shared INTO this subscription. The default list above returns only
+            # CRGs CREATED IN the subscription -- groups shared from another subscription via a
+            # sharing profile are invisible without the resourceIdsOnly query parameter.
+            # https://learn.microsoft.com/azure/virtual-machines/capacity-reservation-group-share
+            try {
+                $crSharedIds = [System.Collections.Generic.List[string]]::new()
+                $crSharedUrl = "https://management.azure.com/subscriptions/$subId/providers/Microsoft.Compute/capacityReservationGroups?api-version=2024-03-01&resourceIdsOnly=All"
+                while ($crSharedUrl) {
+                    $crSharedResp = Invoke-AzRestMethod -Uri $crSharedUrl -Method GET -ErrorAction Stop
+                    if ($crSharedResp.StatusCode -ne 200) { break }
+                    $crSharedData = $crSharedResp.Content | ConvertFrom-Json
+                    foreach ($crSharedVal in @(SafeArray $crSharedData.value)) {
+                        $crSid = SafeProp $crSharedVal 'id'
+                        if ($crSid) { $crSharedIds.Add($crSid) }
+                    }
+                    $crSharedUrl = SafeProp $crSharedData 'nextLink'
+                }
+
+                # Index the CRGs we already have from the owned-only list
+                $crOwnedIds = @{}
+                foreach ($crOwned in $crItems) {
+                    $crOid = SafeProp $crOwned 'id'
+                    if ($crOid) { $crOwnedIds[$crOid.ToLowerInvariant()] = $true }
+                }
+
+                foreach ($crSharedId in $crSharedIds) {
+                    if ($crOwnedIds.ContainsKey($crSharedId.ToLowerInvariant())) { continue }
+                    # ARM ID: /subscriptions/{sub}/resourceGroups/... -> owning sub is segment index 2
+                    $crShOwnerSub = ($crSharedId -split '/')[2]
+                    # If the owning subscription is also being collected, its owned-only pass covers this CRG
+                    if ($SubscriptionIds -contains $crShOwnerSub) { continue }
+                    # Same shared CRG may surface from multiple consuming subscriptions -- collect once
+                    if ($crgSeenSharedIds.ContainsKey($crSharedId.ToLowerInvariant())) { continue }
+                    $crgSeenSharedIds[$crSharedId.ToLowerInvariant()] = $true
+
+                    $crShName = ($crSharedId -split '/')[-1]
+                    $crShFetched = $false
+                    try {
+                        $crShResp = Invoke-AzRestMethod -Uri "https://management.azure.com${crSharedId}?api-version=2024-03-01&`$expand=virtualMachines/`$ref" -Method GET -ErrorAction Stop
+                        if ($crShResp.StatusCode -eq 200) {
+                            $crShCrg = $crShResp.Content | ConvertFrom-Json
+                            $crItems.Add($crShCrg)
+                            $crShFetched = $true
+                        }
+                    }
+                    catch {
+                        Write-Step -Step "CRG Shared" -Message "Detail fetch failed for $(Protect-Value -Value $crShName -Prefix 'CRG' -Length 4)" -Status "Warn"
+                    }
+                    if (-not $crShFetched) {
+                        # Shared CRG detected but not readable (no RBAC in the owning subscription) --
+                        # emit a placeholder so it surfaces downstream instead of vanishing
+                        $capacityReservationGroups.Add([PSCustomObject]@{
+                            SubscriptionId     = Protect-SubscriptionId $subId
+                            GroupName          = Protect-Value -Value $crShName -Prefix "CRG" -Length 4
+                            GroupId            = Protect-ArmId $crSharedId
+                            ReservationName    = "(shared - no read access)"
+                            Location           = ""
+                            Zones              = ""
+                            SKU                = ""
+                            AllocatedCapacity  = 0
+                            ProvisioningState  = "SharedNoAccess"
+                            ProvisioningTime   = ""
+                            UtilizedVMs        = 0
+                            VMReferences       = ""
+                            IsShared           = $true
+                            OwningSubscription = Protect-SubscriptionId $crShOwnerSub
+                        })
+                    }
+                }
+            }
+            catch {
+                Write-Step -Step "Capacity Reservations" -Message "Shared CRG discovery failed -- $($_.Exception.Message)" -Status "Warn"
+            }
+
+            foreach ($crg in $crItems) {
                     $crgId   = SafeProp $crg 'id'
                     if (-not $crgId) { $crgId = SafeProp $crg 'Id' }
                     $crgName = SafeProp $crg 'name'
                     if (-not $crgName) { $crgName = SafeProp $crg 'Name' }
                     if (-not $crgId) { continue }
                     $crgLocation = SafeProp $crg 'location'
+                    $crgOwnerSub = ($crgId -split '/')[2]
+                    $crgIsShared = ($crgOwnerSub -ne $subId)
 
                     # Fetch individual reservations
                     $crgRowsAdded = 0
+                    $crgDetailFailed = $false
                     try {
                         $crDetailUrl = "https://management.azure.com${crgId}/capacityReservations?api-version=2024-03-01"
                         $crDetailResp = Invoke-AzRestMethod -Uri $crDetailUrl -Method GET -ErrorAction Stop
@@ -3408,34 +3488,40 @@ foreach ($subId in $SubscriptionIds) {
                                     ProvisioningTime   = SafeProp $crProps 'provisioningTime'
                                     UtilizedVMs        = $vmRefs.Count
                                     VMReferences       = $(if ($ScrubPII) { '[SCRUBBED]' } else { ($vmRefs -join ";") })
+                                    IsShared           = $crgIsShared
+                                    OwningSubscription = Protect-SubscriptionId $crgOwnerSub
                                 })
                                 $crgRowsAdded++
                             }
                         }
+                        else { $crgDetailFailed = $true }
                     }
                     catch {
+                        $crgDetailFailed = $true
                         Write-Step -Step "CRG Detail" -Message "Failed for $(Protect-Value -Value $crgName -Prefix 'CRG' -Length 4)" -Status "Warn"
                     }
 
-                    # Emit a group-level placeholder so empty reservation groups still surface downstream
+                    # Emit a group-level placeholder so empty reservation groups still surface downstream.
+                    # DetailFetchFailed distinguishes "couldn't read reservations" from a genuinely empty group.
                     if ($crgRowsAdded -eq 0) {
                         $capacityReservationGroups.Add([PSCustomObject]@{
                             SubscriptionId     = Protect-SubscriptionId $subId
                             GroupName          = Protect-Value -Value $crgName -Prefix "CRG" -Length 4
                             GroupId            = Protect-ArmId $crgId
-                            ReservationName    = "(no reservations)"
+                            ReservationName    = $(if ($crgDetailFailed) { "(reservations unreadable)" } else { "(no reservations)" })
                             Location           = $crgLocation
                             Zones              = ""
                             SKU                = ""
                             AllocatedCapacity  = 0
-                            ProvisioningState  = "EmptyGroup"
+                            ProvisioningState  = $(if ($crgDetailFailed) { "DetailFetchFailed" } else { "EmptyGroup" })
                             ProvisioningTime   = ""
                             UtilizedVMs        = 0
                             VMReferences       = ""
+                            IsShared           = $crgIsShared
+                            OwningSubscription = Protect-SubscriptionId $crgOwnerSub
                         })
                     }
                 }
-            }
         }
         catch {
             Write-Step -Step "Capacity Reservations" -Message "Failed -- $($_.Exception.Message)" -Status "Warn"

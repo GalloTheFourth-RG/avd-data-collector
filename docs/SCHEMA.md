@@ -343,20 +343,24 @@ Collected when `-IncludeCapacityReservations` is specified.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| SubscriptionId | string | Subscription ID (anonymized under `-ScrubPII`) |
+| SubscriptionId | string | Subscription the group was discovered from (anonymized under `-ScrubPII`) |
 | GroupName | string | CRG name (anonymized under `-ScrubPII`) |
 | GroupId | string | CRG ARM resource ID (anonymized under `-ScrubPII`) |
-| ReservationName | string | Individual reservation name, or `(no reservations)` for an empty group placeholder row |
+| ReservationName | string | Individual reservation name, or a placeholder: `(no reservations)`, `(reservations unreadable)`, `(shared - no read access)` |
 | Location | string | Azure region |
 | Zones | string | Comma-separated availability zones (empty if none) |
 | SKU | string | Reserved VM SKU |
 | AllocatedCapacity | int | Reserved capacity (from `sku.capacity`) |
-| ProvisioningState | string | Reservation provisioning state; `EmptyGroup` marks the placeholder row for a group with zero reservations |
+| ProvisioningState | string | Reservation provisioning state; placeholder rows use `EmptyGroup`, `DetailFetchFailed`, or `SharedNoAccess` |
 | ProvisioningTime | string | Reservation provisioning timestamp |
 | UtilizedVMs | int | VMs using the reservation |
 | VMReferences | string | Semicolon-separated VM ARM IDs (`[SCRUBBED]` under `-ScrubPII`) |
+| IsShared | bool | v1.7.3+. True when the CRG is owned by a different subscription and shared into the collected one |
+| OwningSubscription | string | v1.7.3+. Subscription that owns the CRG (anonymized under `-ScrubPII`) |
 
 A Capacity Reservation Group with zero reservations still exports one group-level placeholder row (`ReservationName = "(no reservations)"`, `ProvisioningState = "EmptyGroup"`) so the group surfaces downstream instead of vanishing.
+
+As of v1.7.3, discovery uses two passes per subscription: the default owned-only list, plus a `resourceIdsOnly=All` pass that finds CRGs *shared into* the subscription from another subscription ([sharing docs](https://learn.microsoft.com/azure/virtual-machines/capacity-reservation-group-share)). Shared CRGs whose owning subscription is also in `-SubscriptionIds` are collected once via that subscription's owned pass. If the collecting account cannot read a shared CRG in its owning subscription, a `SharedNoAccess` placeholder row is exported.
 
 ### quota-usage.json
 

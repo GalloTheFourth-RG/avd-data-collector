@@ -7,6 +7,12 @@ All notable changes to the Aperture Data Collector will be documented in this fi
 ### Changed
 - **`build.ps1 -Release` now attaches the built `dist/Collect-ApertureData.ps1` as a release asset.** Previously `gh release create` published only the auto-generated source tarballs, so recent releases (e.g. v1.7.1) had no directly downloadable script. The release flow now uploads the built single-file script, and re-running `-Release` against an existing release backfills the asset if it is missing (`gh release upload --clobber`). The v1.7.1 release asset was backfilled retroactively.
 
+## [1.7.3] -- 2026-07-25
+
+### Fixed
+- **Capacity Reservation Groups shared from another subscription were invisible.** The subscription-level list API only returns CRGs *created in* the subscription -- groups shared INTO it via a sharing profile (common enterprise pattern: central capacity subscription shares reservations to workload subscriptions) never appeared, so a customer actively protected by shared reservations saw an empty Reservations section. The collector now performs a second discovery pass with `resourceIdsOnly=All`, fetches full details for shared CRGs from their owning subscription, and marks rows with new `IsShared` / `OwningSubscription` fields. If the collecting account lacks read access in the owning subscription, a placeholder row (`ReservationName = "(shared - no read access)"`, `ProvisioningState = "SharedNoAccess"`) surfaces the group instead of dropping it.
+- **Reservation detail fetch failures were indistinguishable from empty groups.** When the per-group reservations call failed (e.g. permissions), the group exported the same `EmptyGroup` placeholder as a genuinely empty group. Failures now export `ReservationName = "(reservations unreadable)"` with `ProvisioningState = "DetailFetchFailed"`.
+
 ## [1.7.2] -- 2026-07-21
 
 ### Fixed
