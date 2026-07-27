@@ -18,7 +18,7 @@
     your own risk. This tool is not a substitute for professional consulting or Microsoft
     support. No warranty or support guarantee is provided.
 
-    Version: 1.7.4
+    Version: 1.7.5
 .PARAMETER TenantId
     Azure AD / Entra ID tenant ID
 .PARAMETER SubscriptionIds
@@ -639,7 +639,7 @@ if (-not (Get-Command SafeProp -ErrorAction SilentlyContinue)) {
 $WarningPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$script:ScriptVersion = "1.7.4"
+$script:ScriptVersion = "1.7.5"
 $script:SchemaVersion = "2.0"
 
 # Embedded KQL queries (populated by build.ps1, empty when running from source)
@@ -3361,6 +3361,7 @@ foreach ($subId in $SubscriptionIds) {
     if ($IncludeCapacityReservations) {
         Write-Step -Step "Capacity Reservations" -Message "Enumerating..." -Status "Progress"
         try {
+            $crRowsBefore = SafeCount $capacityReservationGroups
             $crApiUrl = "https://management.azure.com/subscriptions/$subId/providers/Microsoft.Compute/capacityReservationGroups?api-version=2024-03-01&`$expand=virtualMachines/`$ref"
             $crResp = Invoke-AzRestMethod -Uri $crApiUrl -Method GET -ErrorAction Stop
             $crItems = [System.Collections.Generic.List[object]]::new()
@@ -3375,8 +3376,19 @@ foreach ($subId in $SubscriptionIds) {
                         $crNlData = $crNlResp.Content | ConvertFrom-Json
                         foreach ($crVal in @(SafeArray $crNlData.value)) { $crItems.Add($crVal) }
                         $crNextLink = SafeProp $crNlData 'nextLink'
-                    } else { $crNextLink = $null }
+                    } else {
+                        Write-Step -Step "Capacity Reservations" -Message "Pagination stopped -- HTTP $($crNlResp.StatusCode); results may be incomplete" -Status "Warn"
+                        $crNextLink = $null
+                    }
                 }
+            }
+            elseif ($crResp.StatusCode -eq 401 -or $crResp.StatusCode -eq 403) {
+                # Do NOT fail silently to zero -- surface the denial so "0 reservations"
+                # can be distinguished from "no read access"
+                Add-PermissionFailure -Section "Capacity Reservations" -RegistryKey "CapacityReservations" -ErrorMessage "HTTP $($crResp.StatusCode) listing capacityReservationGroups in $(Protect-SubscriptionId $subId)"
+            }
+            else {
+                Write-Step -Step "Capacity Reservations" -Message "List failed -- HTTP $($crResp.StatusCode) for $(Protect-SubscriptionId $subId)" -Status "Warn"
             }
 
             # Discover CRGs shared INTO this subscription. The default list above returns only
@@ -3527,9 +3539,20 @@ foreach ($subId in $SubscriptionIds) {
                         })
                     }
                 }
+
+            $crRowsAddedSub = (SafeCount $capacityReservationGroups) - $crRowsBefore
+            if ((SafeCount $crItems) -eq 0 -and $crRowsAddedSub -eq 0) {
+                Write-Step -Step "Capacity Reservations" -Message "None found in $(Protect-SubscriptionId $subId) (list returned HTTP $($crResp.StatusCode))" -Status "Done"
+            } else {
+                Write-Step -Step "Capacity Reservations" -Message "Found $(SafeCount $crItems) group(s), $crRowsAddedSub reservation row(s)" -Status "Done"
+            }
         }
         catch {
-            Write-Step -Step "Capacity Reservations" -Message "Failed -- $($_.Exception.Message)" -Status "Warn"
+            if (Test-IsPermissionError $_.Exception.Message) {
+                Add-PermissionFailure -Section "Capacity Reservations" -RegistryKey "CapacityReservations" -ErrorMessage $_.Exception.Message
+            } else {
+                Write-Step -Step "Capacity Reservations" -Message "Failed -- $($_.Exception.Message)" -Status "Warn"
+            }
         }
     }
 

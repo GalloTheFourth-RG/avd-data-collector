@@ -2,6 +2,11 @@
 
 All notable changes to the Aperture Data Collector will be documented in this file.
 
+## [1.7.5] -- 2026-07-27
+
+### Fixed
+- **Capacity Reservation enumeration no longer fails silently to zero.** A non-200 response from the `capacityReservationGroups` list API (403 access denied, 429 throttling, etc.) previously added no rows and printed no warning, making "0 reservations collected" indistinguishable from "no reservations exist". The collector now: records 401/403 in `permission-failures.json` via the permission tracker; warns with the HTTP status code for other failures; warns when pagination stops early; and prints a per-subscription `Done` line with the group and reservation-row counts found (including an explicit "None found in <sub>" message with the HTTP status when the list legitimately returns empty). Permission-classified exceptions (AuthorizationFailed etc.) thrown during enumeration are also routed to the permission tracker instead of a generic warning.
+
 ## [1.7.4] -- 2026-07-25
 
 ### Added
