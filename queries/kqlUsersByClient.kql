@@ -1,0 +1,14 @@
+// Per-user client usage. Associates named users with the client type/version
+// they connect from, so deprecated clients (MSRDC MSI, RD Store app) can be
+// traced to specific people for targeted migration outreach.
+// UserName is anonymized by Protect-KqlRow when the collector runs with -ScrubPII.
+WVDConnections
+| where State == "Connected"
+| extend HostPool = tostring(split(_ResourceId, '/')[-1])
+| summarize
+    Connections = count(),
+    LastSeen = max(TimeGenerated),
+    HostPools = strcat_array(array_sort_asc(make_set(HostPool, 10)), ";")
+    by UserName, ClientType, ClientVersion, ClientOS
+| order by Connections desc
+| take 2000

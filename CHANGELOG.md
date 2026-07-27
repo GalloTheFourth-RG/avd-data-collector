@@ -2,6 +2,11 @@
 
 All notable changes to the Aperture Data Collector will be documented in this file.
 
+## [1.7.6] -- 2026-07-27
+
+### Added
+- **New `kqlUsersByClient.kql` query (40th KQL query)** -- per-user client usage breakdown from `WVDConnections` (`UserName x ClientType x ClientVersion x ClientOS` with connection counts, last-seen timestamp, and the host pools each combination connects to). Powers the assessment's "Users on End-of-Support Clients" table, which names the specific users still connecting with deprecated clients (legacy MSRDC client, Remote Desktop Store app) so migration outreach can be targeted. Exported as `CurrentWindow_UsersByClient`. When run with `-ScrubPII`, user names and host pool names in the results are anonymized (the new semicolon-joined `HostPools` field is scrubbed per-segment).
+
 ## [1.7.5] -- 2026-07-27
 
 ### Fixed

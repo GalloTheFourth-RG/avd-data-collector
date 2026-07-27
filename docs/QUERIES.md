@@ -35,6 +35,7 @@ Required tables vary by query category:
 | Connection Environment | `kqlConnectionEnvironment.kql` | Join type, OS version, OS description distribution |
 | Client Connection Health | `kqlClientConnectionHealth.kql` | Per-client-version error rates and connection reliability |
 | Client by Host Pool | `kqlClientByHostPool.kql` | Connections and error rates broken down by host pool x client type x version x OS |
+| Users by Client | `kqlUsersByClient.kql` | Per-user client usage (user x client type x version x OS) with last-seen and host pools -- identifies users on deprecated clients |
 
 ### Errors & Disconnects
 

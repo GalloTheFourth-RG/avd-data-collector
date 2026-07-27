@@ -18,7 +18,7 @@
     your own risk. This tool is not a substitute for professional consulting or Microsoft
     support. No warranty or support guarantee is provided.
 
-    Version: 1.7.5
+    Version: 1.7.6
 .PARAMETER TenantId
     Azure AD / Entra ID tenant ID
 .PARAMETER SubscriptionIds
@@ -613,6 +613,10 @@ function Protect-KqlRow {
             '^(HostPool|HostPoolName|PoolName)$' {
                 $Row.$($p.Name) = Protect-HostPoolName $val; break
             }
+            '^(HostPools)$' {
+                # Semicolon-joined set of host pool names (e.g. strcat_array(make_set(HostPool)))
+                $Row.$($p.Name) = ((($val -split ';') | ForEach-Object { Protect-HostPoolName $_ }) -join ';'); break
+            }
             '^(ResourceGroup|ResourceGroupName)$' {
                 $Row.$($p.Name) = Protect-ResourceGroup $val; break
             }
@@ -639,7 +643,7 @@ if (-not (Get-Command SafeProp -ErrorAction SilentlyContinue)) {
 $WarningPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$script:ScriptVersion = "1.7.5"
+$script:ScriptVersion = "1.7.6"
 $script:SchemaVersion = "2.0"
 
 # Embedded KQL queries (populated by build.ps1, empty when running from source)
@@ -2403,6 +2407,22 @@ union isfuzzy=true
   (WVDCheckpoints | where TimeGenerated > ago(14d) | take 1 | extend Type = "WVDCheckpoints")
 | summarize Count = count() by Type
 | order by Type asc
+'@
+    'kqlUsersByClient' = @'
+// Per-user client usage. Associates named users with the client type/version
+// they connect from, so deprecated clients (MSRDC MSI, RD Store app) can be
+// traced to specific people for targeted migration outreach.
+// UserName is anonymized by Protect-KqlRow when the collector runs with -ScrubPII.
+WVDConnections
+| where State == "Connected"
+| extend HostPool = tostring(split(_ResourceId, '/')[-1])
+| summarize
+    Connections = count(),
+    LastSeen = max(TimeGenerated),
+    HostPools = strcat_array(array_sort_asc(make_set(HostPool, 10)), ";")
+    by UserName, ClientType, ClientVersion, ClientOS
+| order by Connections desc
+| take 2000
 '@
     'kqlWvdConnections' = @'
 WVDConnections
@@ -5084,6 +5104,7 @@ else {
         @{ Label = "CurrentWindow_DisconnectHeatmap";       Query = $kqlQueries["kqlDisconnectHeatmap"] },
         @{ Label = "CurrentWindow_ClientConnectionHealth";  Query = $kqlQueries["kqlClientConnectionHealth"] },
         @{ Label = "CurrentWindow_ClientByHostPool";        Query = $kqlQueries["kqlClientByHostPool"] },
+        @{ Label = "CurrentWindow_UsersByClient";           Query = $kqlQueries["kqlUsersByClient"] },
         @{ Label = "CurrentWindow_PeakSessionsByHost";      Query = $kqlQueries["kqlPeakSessionsByHost"] }
     ) | Where-Object { $null -ne $_.Query }
 

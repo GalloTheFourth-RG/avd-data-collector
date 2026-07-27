@@ -437,6 +437,10 @@ function Protect-KqlRow {
             '^(HostPool|HostPoolName|PoolName)$' {
                 $Row.$($p.Name) = Protect-HostPoolName $val; break
             }
+            '^(HostPools)$' {
+                # Semicolon-joined set of host pool names (e.g. strcat_array(make_set(HostPool)))
+                $Row.$($p.Name) = ((($val -split ';') | ForEach-Object { Protect-HostPoolName $_ }) -join ';'); break
+            }
             '^(ResourceGroup|ResourceGroupName)$' {
                 $Row.$($p.Name) = Protect-ResourceGroup $val; break
             }
