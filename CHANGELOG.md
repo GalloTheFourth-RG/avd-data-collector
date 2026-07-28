@@ -2,6 +2,15 @@
 
 All notable changes to the Aperture Data Collector will be documented in this file.
 
+## [1.7.7] -- 2026-07-28
+
+### Fixed
+- **Capacity Reservation Groups found but zero rows exported (`@(SafeArray ...)` double-wrap).** The CRG enumeration loops wrapped `SafeArray` calls in an extra `@()`. `SafeArray` already returns an array via the comma-trick, so the outer `@()` re-wrapped it into a single-element array whose only item was the whole list -- `foreach` iterated once over the array itself, `SafeProp ... 'id'` returned null, and the group was silently skipped (`Found 1 group(s), 0 reservation row(s)` with an empty `capacity-reservation-groups.json`). This affected the owned-CRG list, its pagination pass, and the shared-CRG discovery pass. The same double-wrap also broke VNet peering analysis (`PeeringCount` always 1) and custom DNS server reporting in the network topology collection. All five sites now call `SafeArray` bare.
+- **CRG list items with no resolvable resource id now warn instead of skipping silently** so this class of bug can never again hide behind a clean `[OK]` line.
+
+### Added
+- **Build check 9: `@(SafeArray ...)` double-wrap lint.** `build.ps1 -Verify` now fails when a `SafeArray` call is wrapped in `@()`, preventing this anti-pattern from being reintroduced.
+
 ## [1.7.6] -- 2026-07-27
 
 ### Added

@@ -282,6 +282,30 @@ if ($Verify) {
         # Warning only for now — will become a build failure once existing code is cleaned up
     }
 
+    # 8. @(SafeArray ...) double-wrap check
+    # SafeArray already returns an array (comma-trick). Wrapping the call in @()
+    # re-wraps it, so foreach iterates ONCE over the whole array as a single item
+    # and property access on it returns null -- rows get silently dropped.
+    # Root cause of the "Found 1 CRG, 0 reservation rows" customer bug (v1.7.7).
+    Write-Host ""
+    Write-Host "SafeArray Double-Wrap Check:" -ForegroundColor Cyan
+    $doubleWrapIssues = @()
+    for ($i = 0; $i -lt $srcLines.Count; $i++) {
+        $line = $srcLines[$i]
+        if ($line -match '^\s*#') { continue }
+        if ($line -match '@\(\s*SafeArray\b') {
+            $snippet = $line.Trim()
+            $doubleWrapIssues += "Line $($i+1): $($snippet.Substring(0, [math]::Min(100, $snippet.Length)))"
+        }
+    }
+    if ($doubleWrapIssues.Count -eq 0) {
+        Write-Host "  [OK] No @(SafeArray ...) double-wrapping detected" -ForegroundColor Green
+    } else {
+        Write-Host "  [X] $($doubleWrapIssues.Count) @(SafeArray ...) double-wrap(s) -- remove the outer @(), SafeArray already returns an array:" -ForegroundColor Red
+        $doubleWrapIssues | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+        $allPassed = $false
+    }
+
     Write-Host ""
     if ($allPassed) {
         Write-Host "All checks passed [OK]" -ForegroundColor Green

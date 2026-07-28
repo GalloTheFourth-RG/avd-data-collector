@@ -18,7 +18,7 @@
     your own risk. This tool is not a substitute for professional consulting or Microsoft
     support. No warranty or support guarantee is provided.
 
-    Version: 1.7.6
+    Version: 1.7.7
 .PARAMETER TenantId
     Azure AD / Entra ID tenant ID
 .PARAMETER SubscriptionIds
@@ -643,7 +643,7 @@ if (-not (Get-Command SafeProp -ErrorAction SilentlyContinue)) {
 $WarningPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$script:ScriptVersion = "1.7.6"
+$script:ScriptVersion = "1.7.7"
 $script:SchemaVersion = "2.0"
 
 # Embedded KQL queries (populated by build.ps1, empty when running from source)
@@ -3387,14 +3387,18 @@ foreach ($subId in $SubscriptionIds) {
             $crItems = [System.Collections.Generic.List[object]]::new()
             if ($crResp.StatusCode -eq 200) {
                 $crData = $crResp.Content | ConvertFrom-Json
-                foreach ($crVal in @(SafeArray $crData.value)) { $crItems.Add($crVal) }
+                # NOTE: never wrap SafeArray in @() -- SafeArray already returns an array via the
+                # comma-trick, and @() re-wraps it so foreach iterates ONCE over the whole array
+                # (SafeProp on it returns null -> rows silently skipped). Root cause of the
+                # "Found 1 group(s), 0 reservation row(s)" bug.
+                foreach ($crVal in (SafeArray $crData.value)) { $crItems.Add($crVal) }
                 # Handle pagination
                 $crNextLink = SafeProp $crData 'nextLink'
                 while ($crNextLink) {
                     $crNlResp = Invoke-AzRestMethod -Uri $crNextLink -Method GET -ErrorAction Stop
                     if ($crNlResp.StatusCode -eq 200) {
                         $crNlData = $crNlResp.Content | ConvertFrom-Json
-                        foreach ($crVal in @(SafeArray $crNlData.value)) { $crItems.Add($crVal) }
+                        foreach ($crVal in (SafeArray $crNlData.value)) { $crItems.Add($crVal) }
                         $crNextLink = SafeProp $crNlData 'nextLink'
                     } else {
                         Write-Step -Step "Capacity Reservations" -Message "Pagination stopped -- HTTP $($crNlResp.StatusCode); results may be incomplete" -Status "Warn"
@@ -3422,7 +3426,7 @@ foreach ($subId in $SubscriptionIds) {
                     $crSharedResp = Invoke-AzRestMethod -Uri $crSharedUrl -Method GET -ErrorAction Stop
                     if ($crSharedResp.StatusCode -ne 200) { break }
                     $crSharedData = $crSharedResp.Content | ConvertFrom-Json
-                    foreach ($crSharedVal in @(SafeArray $crSharedData.value)) {
+                    foreach ($crSharedVal in (SafeArray $crSharedData.value)) {
                         $crSid = SafeProp $crSharedVal 'id'
                         if ($crSid) { $crSharedIds.Add($crSid) }
                     }
@@ -3490,7 +3494,11 @@ foreach ($subId in $SubscriptionIds) {
                     if (-not $crgId) { $crgId = SafeProp $crg 'Id' }
                     $crgName = SafeProp $crg 'name'
                     if (-not $crgName) { $crgName = SafeProp $crg 'Name' }
-                    if (-not $crgId) { continue }
+                    if (-not $crgId) {
+                        # Never skip silently -- surface malformed/unexpected list items
+                        Write-Step -Step "Capacity Reservations" -Message "Skipping a CRG list item with no resource id (type: $($crg.GetType().Name))" -Status "Warn"
+                        continue
+                    }
                     $crgLocation = SafeProp $crg 'location'
                     $crgOwnerSub = ($crgId -split '/')[2]
                     $crgIsShared = ($crgOwnerSub -ne $subId)
@@ -4003,8 +4011,8 @@ if ($hasExtendedCollection) {
                 if (-not $vnet) { continue }
                 try {
                     $dhcpOpts = SafeProp $vnet 'DhcpOptions'
-                    $dnsServers = @(if ($dhcpOpts) { SafeArray (SafeProp $dhcpOpts 'DnsServers') } else { @() })
-                    $peerings = @(SafeArray (SafeProp $vnet 'VirtualNetworkPeerings'))
+                    $dnsServers = if ($dhcpOpts) { SafeArray (SafeProp $dhcpOpts 'DnsServers') } else { @() }
+                    $peerings = SafeArray (SafeProp $vnet 'VirtualNetworkPeerings')
                     $disconnected = @($peerings | Where-Object { $_.PeeringState -ne 'Connected' })
                     $addrSpace = SafeProp $vnet 'AddressSpace'
                     $addrPrefixes = if ($addrSpace) { SafeProp $addrSpace 'AddressPrefixes' } else { @() }
