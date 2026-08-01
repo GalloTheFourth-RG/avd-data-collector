@@ -2,6 +2,13 @@
 
 All notable changes to the Aperture Data Collector will be documented in this file.
 
+## [1.7.8] -- 2026-08-01
+
+### Fixed
+- **Capacity Reservation detail failures now identify the cause.** Per-group reservation reads now record a safe `DetailError`, print the failure class in the diagnostic log, and route missing `Microsoft.Compute/capacityReservationGroups/capacityReservations/read` access into `permission-failures.json` instead of exposing only the opaque `DetailFetchFailed` state downstream.
+- **Non-zonal Capacity Reservations no longer fail response processing under strict mode.** The detail parser previously accessed optional REST properties such as `zones` directly; when Azure omitted one, the otherwise successful HTTP 200 response was caught and mislabeled `DetailFetchFailed`. Optional reservation, SKU, zone, and VM-association fields now use the collector's safe-access helpers.
+- **403 Forbidden on Log Analytics queries now explains itself.** When the TableDiscovery connectivity check fails, the collector previously printed only `Workspace unreachable (QueryFailed) -- skipping remaining queries` with no error detail or guidance (guidance existed only for `WorkspaceNotFound`). The underlying error message is now printed, and when it is a permission error (403/Forbidden) the collector: records the failure in `permission-failures.json` via the permission tracker; re-reads the workspace's `PublicNetworkAccessForQuery` property to distinguish an AMPLS lockdown (public query access disabled -- ARM reads succeed but the query endpoint rejects requests from outside the private network) from a plain RBAC gap (workspace read without `Microsoft.OperationalInsights/workspaces/query/*/read`); and prints the matching remediation (run from a machine/VPN with AMPLS line-of-sight or enable public query access, vs. grant `Log Analytics Reader` on the workspace). Seen in the field on a healthcare customer's `law-mgt-*` workspace where all 39 AVD queries were silently skipped.
+
 ## [1.7.7] -- 2026-07-28
 
 ### Fixed

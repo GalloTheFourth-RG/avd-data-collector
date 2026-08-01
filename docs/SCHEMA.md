@@ -357,6 +357,7 @@ Collected when `-IncludeCapacityReservations` is specified.
 | VMReferences | string | Semicolon-separated VM ARM IDs (`[SCRUBBED]` under `-ScrubPII`) |
 | IsShared | bool | v1.7.3+. True when the CRG is owned by a different subscription and shared into the collected one |
 | OwningSubscription | string | v1.7.3+. Subscription that owns the CRG (anonymized under `-ScrubPII`) |
+| DetailError | string | Empty when details were read; otherwise a safe reason such as `AuthorizationFailed`, `HTTP 429`, or `RequestFailed` |
 
 A Capacity Reservation Group with zero reservations still exports one group-level placeholder row (`ReservationName = "(no reservations)"`, `ProvisioningState = "EmptyGroup"`) so the group surfaces downstream instead of vanishing.
 

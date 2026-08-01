@@ -18,7 +18,7 @@
     your own risk. This tool is not a substitute for professional consulting or Microsoft
     support. No warranty or support guarantee is provided.
 
-    Version: 1.7.7
+    Version: 1.7.8
 .PARAMETER TenantId
     Azure AD / Entra ID tenant ID
 .PARAMETER SubscriptionIds
@@ -183,7 +183,7 @@ if (-not (Get-Command SafeProp -ErrorAction SilentlyContinue)) {
 $WarningPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$script:ScriptVersion = "1.7.7"
+$script:ScriptVersion = "1.7.8"
 $script:SchemaVersion = "2.0"
 
 # Embedded KQL queries (populated by build.ps1, empty when running from source)
@@ -2185,6 +2185,7 @@ foreach ($subId in $SubscriptionIds) {
                             VMReferences       = ""
                             IsShared           = $true
                             OwningSubscription = Protect-SubscriptionId $crShOwnerSub
+                            DetailError         = "AuthorizationFailed"
                         })
                     }
                 }
@@ -2210,28 +2211,36 @@ foreach ($subId in $SubscriptionIds) {
                     # Fetch individual reservations
                     $crgRowsAdded = 0
                     $crgDetailFailed = $false
+                    $crgDetailError = ""
+                    $crgDetailRequestSucceeded = $false
                     try {
                         $crDetailUrl = "https://management.azure.com${crgId}/capacityReservations?api-version=2024-03-01"
                         $crDetailResp = Invoke-AzRestMethod -Uri $crDetailUrl -Method GET -ErrorAction Stop
                         if ($crDetailResp.StatusCode -eq 200) {
-                            $crDetails = ($crDetailResp.Content | ConvertFrom-Json).value
-                            foreach ($cr in @($crDetails)) {
-                                $crProps = $cr.properties
+                            $crgDetailRequestSucceeded = $true
+                            $crDetailData = $crDetailResp.Content | ConvertFrom-Json
+                            $crDetails = SafeProp $crDetailData 'value'
+                            foreach ($cr in (SafeArray $crDetails)) {
+                                $crProps = SafeProp $cr 'properties'
                                 $vmRefs = @()
-                                if ($crProps.PSObject.Properties.Name -contains 'virtualMachinesAssociated') {
-                                    $vmRefs = @($crProps.virtualMachinesAssociated | ForEach-Object { $_.id })
+                                foreach ($vmAssociation in (SafeArray (SafeProp $crProps 'virtualMachinesAssociated'))) {
+                                    $vmReferenceId = SafeProp $vmAssociation 'id'
+                                    if ($vmReferenceId) { $vmRefs += $vmReferenceId }
                                 }
                                 # Capacity lives on the SKU object (sku.capacity), NOT properties.capacity
+                                $crSku = SafeProp $cr 'sku'
                                 $crCapacity = 0
-                                if ($cr.sku -and ($cr.sku.PSObject.Properties.Name -contains 'capacity') -and $null -ne $cr.sku.capacity) { $crCapacity = [int]$cr.sku.capacity }
+                                $crSkuCapacity = SafeProp $crSku 'capacity'
+                                if ($null -ne $crSkuCapacity) { $crCapacity = [int]$crSkuCapacity }
+                                $crZones = SafeArray (SafeProp $cr 'zones')
                                 $capacityReservationGroups.Add([PSCustomObject]@{
                                     SubscriptionId     = Protect-SubscriptionId $subId
                                     GroupName          = Protect-Value -Value $crgName -Prefix "CRG" -Length 4
                                     GroupId            = Protect-ArmId $crgId
-                                    ReservationName    = Protect-Value -Value $cr.name -Prefix "CRes" -Length 4
-                                    Location           = $cr.location
-                                    Zones              = if ($cr.zones) { ($cr.zones -join ",") } else { "" }
-                                    SKU                = if ($cr.sku) { $cr.sku.name } else { "" }
+                                    ReservationName    = Protect-Value -Value (SafeProp $cr 'name') -Prefix "CRes" -Length 4
+                                    Location           = SafeProp $cr 'location'
+                                    Zones              = $crZones -join ","
+                                    SKU                = SafeProp $crSku 'name'
                                     AllocatedCapacity  = $crCapacity
                                     ProvisioningState  = SafeProp $crProps 'provisioningState'
                                     ProvisioningTime   = SafeProp $crProps 'provisioningTime'
@@ -2239,15 +2248,26 @@ foreach ($subId in $SubscriptionIds) {
                                     VMReferences       = $(if ($ScrubPII) { '[SCRUBBED]' } else { ($vmRefs -join ";") })
                                     IsShared           = $crgIsShared
                                     OwningSubscription = Protect-SubscriptionId $crgOwnerSub
+                                    DetailError         = ""
                                 })
                                 $crgRowsAdded++
                             }
                         }
-                        else { $crgDetailFailed = $true }
+                        else {
+                            $crgDetailFailed = $true
+                            $crgDetailError = "HTTP $($crDetailResp.StatusCode)"
+                        }
                     }
                     catch {
                         $crgDetailFailed = $true
-                        Write-Step -Step "CRG Detail" -Message "Failed for $(Protect-Value -Value $crgName -Prefix 'CRG' -Length 4)" -Status "Warn"
+                        $crgDetailError = if ($crgDetailRequestSucceeded) { "ResponseProcessingFailed" } elseif (Test-IsPermissionError $_.Exception.Message) { "AuthorizationFailed" } elseif ($_.Exception.Message -match '\b(4\d{2}|5\d{2})\b') { "HTTP $($Matches[1])" } else { "RequestFailed" }
+                    }
+                    if ($crgDetailFailed) {
+                        $crgDisplayName = Protect-Value -Value $crgName -Prefix 'CRG' -Length 4
+                        Write-Step -Step "CRG Detail" -Message "Failed for $crgDisplayName -- $crgDetailError" -Status "Warn"
+                        if ($crgDetailError -eq "AuthorizationFailed" -or $crgDetailError -eq "HTTP 401" -or $crgDetailError -eq "HTTP 403") {
+                            Add-PermissionFailure -Section "Capacity Reservation Details" -RegistryKey "CapacityReservations" -ErrorMessage "Missing Microsoft.Compute/capacityReservationGroups/capacityReservations/read on $crgDisplayName"
+                        }
                     }
 
                     # Emit a group-level placeholder so empty reservation groups still surface downstream.
@@ -2268,6 +2288,7 @@ foreach ($subId in $SubscriptionIds) {
                             VMReferences       = ""
                             IsShared           = $crgIsShared
                             OwningSubscription = Protect-SubscriptionId $crgOwnerSub
+                            DetailError         = $crgDetailError
                         })
                     }
                 }
@@ -3864,9 +3885,37 @@ else {
             $tdStatus = ($tdResult | Where-Object { $_.PSObject.Properties.Name -contains 'Status' } | Select-Object -First 1)
             if ($tdStatus -and $tdStatus.Status -in @("WorkspaceNotFound", "QueryFailed", "InvalidWorkspaceId")) {
                 Write-Step -Step "KQL" -Message "Workspace unreachable ($($tdStatus.Status)) -- skipping remaining queries" -Status "Error"
+                $tdError = if ($tdStatus.PSObject.Properties.Name -contains 'Error') { [string]$tdStatus.Error } else { "" }
+                if ($tdError) {
+                    Write-Host "    Error: $tdError" -ForegroundColor Yellow
+                }
                 if ($tdStatus.Status -eq "WorkspaceNotFound") {
                     Write-Host "    Verify the workspace resource ID is correct and that you have Log Analytics Reader access." -ForegroundColor Yellow
                     Write-Host "    Expected format: /subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<name>" -ForegroundColor Gray
+                }
+                elseif ($tdStatus.Status -eq "QueryFailed" -and (Test-IsPermissionError $tdError)) {
+                    Add-PermissionFailure -Section "Log Analytics" -RegistryKey "LogAnalytics" -ErrorMessage $tdError
+
+                    # ARM read succeeded but the query data plane returned 403 -- distinguish RBAC gap from AMPLS lockdown
+                    $pnaQuery = ""
+                    try {
+                        $wsIdParts = $wsId.TrimEnd('/') -split '/'
+                        $wsObj = Get-AzOperationalInsightsWorkspace -ResourceGroupName $wsIdParts[4] -Name $wsIdParts[8] -ErrorAction Stop
+                        $pnaQuery = [string](SafeProp $wsObj 'PublicNetworkAccessForQuery')
+                    } catch { }
+
+                    if ($pnaQuery -eq 'Disabled') {
+                        Write-Host "    This workspace has public network access for QUERIES disabled (Azure Monitor Private Link Scope)." -ForegroundColor Yellow
+                        Write-Host "    ARM reads succeed, but the query endpoint rejects requests from outside the private network." -ForegroundColor Yellow
+                        Write-Host "    Fix: run the collector from a machine/VPN with line-of-sight to the AMPLS private endpoints," -ForegroundColor Gray
+                        Write-Host "         or temporarily enable 'Accept queries from public networks' on the workspace Network Isolation blade." -ForegroundColor Gray
+                    } else {
+                        Write-Host "    The workspace is visible via ARM, but the query API returned access denied. Likely causes:" -ForegroundColor Yellow
+                        Write-Host "      1. Missing 'Log Analytics Reader' role on the workspace -- the query data plane requires" -ForegroundColor Gray
+                        Write-Host "         Microsoft.OperationalInsights/workspaces/query/*/read (workspace read alone is not enough)." -ForegroundColor Gray
+                        Write-Host "      2. Workspace behind an Azure Monitor Private Link Scope and this machine is outside the private network." -ForegroundColor Gray
+                        Write-Host "    Grant: az role assignment create --assignee <user> --role 'Log Analytics Reader' --scope '<workspace-resource-id>'" -ForegroundColor Gray
+                    }
                 }
                 continue
             }
